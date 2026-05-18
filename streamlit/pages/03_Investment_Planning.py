@@ -1379,7 +1379,7 @@ with st.container(border=True):
         st.number_input(
             S("p3", "label_n_paths"),
             min_value=100,
-            max_value=50000,
+            max_value=5000,
             step=100,
             key=_widget_key("inv_mc_n_paths"),
             on_change=on_widget_change,
