@@ -629,7 +629,7 @@ else:
             x=alt.X("inflated_amount:Q", title=S("p2", "axis_total_amount"),
                     stack="zero", scale=alt.Scale(domain=[0, x_max_cat]),
                     axis=alt.Axis(format=",.0f")),
-            color=alt.Color("sub_category:N", sort=sub_cat_order, legend=None),
+            color=alt.Color("sub_category:N", sort=legend_order, legend=None),
             order=alt.Order("order_idx:Q", sort="ascending"),
             tooltip=[
                 alt.Tooltip("category:N", title=S("p2", "legend_category")),
