@@ -72,6 +72,33 @@ _S: Dict[str, Any] = {
         "title":             "📘 แบบจำลองค่าใช้จ่ายทางการศึกษา",
         "caption":           "กรอกข้อมูลลูก ค่าใช้จ่าย แผนออม และสมมติฐาน แล้วกด Simulation เพื่อดูผลการจำลอง",
 
+        # ── Section 0: Customer ID ──
+        "cid_header":        "🆔 รหัสลูกค้า",
+        # "cid_caption":       "กรุณากรอก cust_id (ตัวเลขเท่านั้น 30 หลักพอดี) — ใช้สำหรับ run simulation และบันทึก/โหลดข้อมูลจากครั้งก่อน",
+        # "cid_placeholder":   "เช่น 001100000000000000000000000122",
+        "cid_caption":       "กรุณากรอก cust_id (ตัวเลขเท่านั้น 10 หลักพอดี) — ใช้สำหรับ run simulation และบันทึก/โหลดข้อมูลจากครั้งก่อน",
+        "cid_placeholder":   "เช่น 0123456789 (สำหรับทดสอบ)",
+        "cid_check_failed":  "ไม่สามารถตรวจสอบข้อมูลก่อนหน้าได้: {error}",
+        "cid_prev_found":    "พบข้อมูลก่อนหน้าของ cust_id นี้",
+        "cid_last_saved":    " บันทึกล่าสุด: {ts}",
+        "cid_btn_import":    "📥 นำเข้าข้อมูลก่อนหน้า",
+        "cid_imported":      "นำเข้าข้อมูล {n} ฟิลด์เรียบร้อย กำลังโหลดใหม่…",
+        "cid_no_prev":       "ไม่พบข้อมูลก่อนหน้า",
+        "cid_import_failed": "ไม่สามารถนำเข้าข้อมูลก่อนหน้าได้: {error}",
+
+        # cust_id validation messages
+        "cid_err_empty":     "กรุณากรอก cust_id",
+        "cid_err_digits":    "cust_id ต้องเป็นตัวเลข (0–9) เท่านั้น",
+        "cid_err_exact":     "cust_id ต้องมี {required} หลักพอดี (กรอกแล้ว {got} หลัก)",
+        "cid_err_max":       "cust_id ต้องมีไม่เกิน {max} หลัก (กรอกแล้ว {got} หลัก)",
+        "cid_err_min":       "cust_id ต้องมีอย่างน้อย {min} หลัก",
+
+        # cust_id gate at run section
+        "cid_gate_info":     "กรุณากรอก cust_id ที่ด้านบนของหน้าก่อนเริ่ม simulation ({error})",
+
+        # Save warning after run
+        "save_warn":         "Simulation สำเร็จ แต่ไม่สามารถบันทึกข้อมูลได้: {error}",
+
         # ── Section 1: Child ──แผนการ
         "sec1_header":       "1) ข้อมูลลูก",
         "sec1_caption":      "ระบุจำนวนลูก แผนการเรียน และค่าใช้จ่ายพิเศษของลูก",
@@ -109,6 +136,10 @@ _S: Dict[str, Any] = {
         "label_school_type":      "ประเภทโรงเรียน",
         "label_school_name":      "ชื่อโรงเรียน",
         "label_note":             "หมายเหตุ",
+
+        # School name hybrid widget (selectbox + custom text)
+        "label_school_name_custom":      "ระบุชื่อโรงเรียนเอง",
+        "placeholder_school_name_custom":"ระบุชื่อโรงเรียน",
 
         # Country option labels
         "opt_country_":     "(ไม่ระบุ)",
@@ -246,6 +277,13 @@ _S: Dict[str, Any] = {
         "kpi_surplus":          "เกิน",
         "kpi_deficit":          "ขาด",
 
+        # ── Simulate Assumption expander (interactive re-run) ──
+        "assump_expander":      "🧪 ปรับสมมติฐานการจำลอง (ทดลองดูผลแบบ interactive)",
+        "assump_caption":       "เปลี่ยนค่าด้านล่างแล้วกด ‘จำลองใหม่’ เพื่อดูผลทันที — ค่าที่ปรับจะถูกบันทึกลงฐานข้อมูลและซิงค์กลับไปยังหน้ากรอกข้อมูลโดยอัตโนมัติ",
+        "assump_btn_rerun":     "🔄 จำลองใหม่",
+        "assump_rerun_success": "✅ จำลองใหม่สำเร็จ และบันทึกลงฐานข้อมูลแล้ว",
+        "assump_rerun_failed":  "❌ จำลองใหม่ล้มเหลว: {error}",
+
         # ── Chart section headers ──
         "chart1_header":    "พอร์ตโฟลิโอ (ตั้งแต่ปีที่เริ่มออมเงินจนถึงปีสุดท้ายที่มีค่าใช้จ่าย)",
         "chart1_caption":   "เงินออมสะสม (รวมผลตอบแทน) เทียบกับค่าใช้จ่ายสะสม และยอดเงินคงเหลือรายปี",
@@ -325,9 +363,20 @@ _S: Dict[str, Any] = {
         "ctx_initial":      "เงินออมเริ่มต้น + เงินก้อนพิเศษ",
         "ctx_monthly":      "ออมรายเดือน",
 
+        # ── Bucket horizon inputs (R13 — contiguous end-year semantics) ──
+        "label_liquidity_end_year": "ปีสิ้นสุดของ Liquidity",
+        "label_liquidity_help":     "Liquidity เริ่มที่ปี 1 — เลือกปีสุดท้ายที่ bucket นี้ครอบคลุม",
+        "label_stability_end_year": "ปีสิ้นสุดของ Stability",
+        "label_stability_help":     "Stability เริ่มอัตโนมัติที่ (ปีสิ้นสุดของ Liquidity + 1) — เลือกปีสุดท้ายที่ bucket นี้ครอบคลุม",
+        "bucket_horizon_caption":   "Liquidity: ปี 1–{liq_end} | Stability: ปี {stab_start}–{stab_end} | Growth: ปี {grow_start}–∞ (rolling window — target weight ปรับใหม่ทุกปี)",
+
+        # ── Allocation evolution chart (R6) ──
+        "chart_alloc_title":        "**สัดส่วนเงินในแต่ละ Bucket รายปี (P50)**",
+        "chart_alloc_caption":      "แสดงสัดส่วนเงินจริงใน Bucket แต่ละปี — จากค่า P50 (median) ของ simulation ทั้งหมด",
+
         # ── Section 2: Bucket & Asset Config ──
         "sec2_header":      "2) การตั้งค่า Bucket & Asset",
-        "sec2_caption":     "กำหนดจำนวน bucket กรอบเวลาแต่ละ bucket และ asset ภายใน — ระบบจะ simulate return ของแต่ละ asset แล้วรวม weighted average เป็น bucket return",
+        "sec2_caption":     "โครงสร้าง 3 Bucket ตายตัว — กำหนดระยะเวลาด้านบน แล้วตั้งค่า asset ภายในแต่ละ Bucket",
         "bucket_tbl_header":"**ตั้งค่า Bucket** (เพิ่ม/ลบ/แก้ไขได้)",
         "bucket_tbl_hint":  "year_end = 0 หมายถึง open-ended (bucket สุดท้าย) | discount_rate_pct ใช้คิด PV requirement",
         "asset_tbl_header": "**ตั้งค่า Asset แต่ละ Bucket**",
@@ -441,6 +490,33 @@ _S: Dict[str, Any] = {
         "chart_shortfall":  "**Shortfall Probability รายปี / Bucket**",
         "chart_final_dist": "**การกระจายตัวของเงินคงเหลือ ณ สิ้นแผน — ทุกเส้นทางจำลอง**",
         "chart_sf_year":    "**ปีที่มักเกิดเหตุการณ์เงินไม่พอ — กระจายตัวตามปี**",
+        "chart_sf_year_y":  "โอกาสเงินหมดในปีนี้ (% ของ paths)",
+        "chart_cum_exp_caption": "เส้นประสีเทาเข้ม = ค่าใช้จ่ายสะสมรวมทุกปี (บาท)",
+        "chart_cum_exp_tooltip": "ค่าใช้จ่ายสะสม (บาท)",
+        "chart_seq_risk_title":  "**Sequence-of-returns risk — แบ่งกลุ่มตามผลตอบแทน 3 ปีแรก**",
+        "chart_seq_risk_caption":(
+            "แบ่ง paths เป็น 3 กลุ่มเท่ากัน (tercile) ตามค่าเฉลี่ย sampled return ใน 3 ปีแรก "
+            "แล้วพล็อต median ของยอดเงินรวมทุก bucket — แสดงผลกระทบของ "
+            "**ลำดับ** ผลตอบแทนต่อพอร์ตในระยะยาว"
+        ),
+        "chart_seq_bad":   "ขาลงช่วงต้น (กลุ่มล่าง 1/3)",
+        "chart_seq_mid":   "ปานกลาง (กลุ่มกลาง 1/3)",
+        "chart_seq_good":  "ขาขึ้นช่วงต้น (กลุ่มบน 1/3)",
+
+        # CAGR / Annualized return distribution
+        "chart_cagr_title":   "**ผลตอบแทนต่อปีที่เกิดขึ้นจริง (Annualized Return) — กระจายตัวทุกเส้นทาง**",
+        "chart_cagr_caption": (
+            "Dollar-weighted return เฉลี่ยต่อปี — ถ่วงน้ำหนักด้วย beginning_balance "
+            "ของแต่ละ bucket × ปี (สะท้อนผลตอบแทนจริงบนเงินที่มีอยู่)"
+        ),
+        "kpi_cagr_p10":      "Pessimistic (P10)",
+        "kpi_cagr_p50":      "Median (P50)",
+        "kpi_cagr_p90":      "Optimistic (P90)",
+        "kpi_cagr_expected": "คาดหวัง (Expected)",
+        "kpi_cagr_p50_help": "ค่ากลางของผลตอบแทนต่อปีจาก simulation — Δ เทียบกับค่าคาดหวัง",
+        "kpi_cagr_expected_help": (
+            "ค่าเฉลี่ย expected return ของ bucket ถ่วงน้ำหนักด้วย initial allocation"
+        ),
 
         # Tables section
         "tables_header":    "### 📊 ตารางข้อมูล",

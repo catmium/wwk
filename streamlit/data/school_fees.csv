@@ -1,0 +1,95 @@
+school_name,level,country,school_type,age_min,age_max,annual_cost,original_amount,original_currency,notes,source_year,ref_url
+ISB – International School Bangkok,kindergarten,TH,international,3,5,640000,640000,THB,Nursery–KG; ปีการศึกษา 2025/26,2025,https://www.isb.ac.th
+ISB – International School Bangkok,elementary,TH,international,6,11,985000,985000,THB,Grade 1–5; ปีการศึกษา 2025/26,2025,https://www.isb.ac.th
+ISB – International School Bangkok,middle_school,TH,international,12,14,1085000,1085000,THB,Grade 6–8; ปีการศึกษา 2025/26,2025,https://www.isb.ac.th
+ISB – International School Bangkok,high_school,TH,international,15,18,1175000,1175000,THB,Grade 9–12; ปีการศึกษา 2025/26,2025,https://www.isb.ac.th
+NIST International School,kindergarten,TH,international,3,5,550000,550000,THB,Early Years; ประมาณการ 2024/25,2024,https://www.nist.ac.th
+NIST International School,elementary,TH,international,6,11,720000,720000,THB,Primary; ประมาณการ 2024/25,2024,https://www.nist.ac.th
+NIST International School,middle_school,TH,international,12,14,820000,820000,THB,MYP; ประมาณการ 2024/25,2024,https://www.nist.ac.th
+NIST International School,high_school,TH,international,15,18,870000,870000,THB,IB Diploma; ประมาณการ 2024/25,2024,https://www.nist.ac.th
+Bangkok Patana School,kindergarten,TH,international,3,5,540000,540000,THB,Early Years; 2024/25,2024,https://www.patana.ac.th
+Bangkok Patana School,elementary,TH,international,6,11,710000,710000,THB,Primary; 2024/25,2024,https://www.patana.ac.th
+Bangkok Patana School,middle_school,TH,international,12,14,800000,800000,THB,Secondary Y7–9; 2024/25,2024,https://www.patana.ac.th
+Bangkok Patana School,high_school,TH,international,15,18,945000,945000,THB,Sixth Form IB; 2024/25,2024,https://www.patana.ac.th
+Harrow International School Bangkok,kindergarten,TH,international,3,5,650000,650000,THB,Early Years; ประมาณการ 2024/25,2024,https://www.harrowschool.ac.th
+Harrow International School Bangkok,elementary,TH,international,6,11,850000,850000,THB,Junior School; ประมาณการ 2024/25,2024,https://www.harrowschool.ac.th
+Harrow International School Bangkok,middle_school,TH,international,12,14,980000,980000,THB,Senior School; ประมาณการ 2024/25,2024,https://www.harrowschool.ac.th
+Harrow International School Bangkok,high_school,TH,international,15,18,1100000,1100000,THB,Sixth Form; ประมาณการ 2024/25,2024,https://www.harrowschool.ac.th
+Rugby School Thailand,kindergarten,TH,international,3,5,480000,480000,THB,Prep School; ประมาณการ 2024/25,2024,https://www.rugbyschoolthailand.com
+Rugby School Thailand,elementary,TH,international,6,11,670000,670000,THB,Junior; ประมาณการ 2024/25,2024,https://www.rugbyschoolthailand.com
+Rugby School Thailand,high_school,TH,international,15,18,900000,900000,THB,Senior + A-Level; ประมาณการ 2024/25,2024,https://www.rugbyschoolthailand.com
+Shrewsbury International School,kindergarten,TH,international,3,5,500000,500000,THB,Early Years; ประมาณการ 2024/25,2024,https://www.shrewsbury.ac.th
+Shrewsbury International School,elementary,TH,international,6,11,710000,710000,THB,Junior; ประมาณการ 2024/25,2024,https://www.shrewsbury.ac.th
+Shrewsbury International School,middle_school,TH,international,12,14,820000,820000,THB,Senior; ประมาณการ 2024/25,2024,https://www.shrewsbury.ac.th
+Shrewsbury International School,high_school,TH,international,15,18,950000,950000,THB,Sixth Form IB/A-Level; ประมาณการ,2024,https://www.shrewsbury.ac.th
+Wells International School,elementary,TH,international,6,11,400000,400000,THB,ประมาณการ 2024/25,2024,https://www.wells.ac.th
+Wells International School,middle_school,TH,international,12,14,450000,450000,THB,ประมาณการ 2024/25,2024,https://www.wells.ac.th
+Wells International School,high_school,TH,international,15,18,500000,500000,THB,ประมาณการ 2024/25,2024,https://www.wells.ac.th
+St. Andrews International School BKK,kindergarten,TH,international,3,5,380000,380000,THB,Early Years; ประมาณการ 2024/25,2024,https://www.standrews.ac.th
+St. Andrews International School BKK,elementary,TH,international,6,11,500000,500000,THB,Primary; ประมาณการ 2024/25,2024,https://www.standrews.ac.th
+St. Andrews International School BKK,high_school,TH,international,15,18,620000,620000,THB,Secondary; ประมาณการ 2024/25,2024,https://www.standrews.ac.th
+KIS International School,kindergarten,TH,international,3,5,330000,330000,THB,ประมาณการ 2024/25,2024,https://www.kis.ac.th
+KIS International School,elementary,TH,international,6,11,440000,440000,THB,ประมาณการ 2024/25,2024,https://www.kis.ac.th
+KIS International School,high_school,TH,international,15,18,560000,560000,THB,ประมาณการ 2024/25,2024,https://www.kis.ac.th
+Singapore International School (BKK),elementary,TH,international,6,11,260000,260000,THB,SIS Bangkok; หลักสูตรสิงคโปร์ ประมาณการ 2024/25,2024,https://www.sisb.ac.th
+Singapore International School (BKK),high_school,TH,international,15,18,364000,364000,THB,SIS Bangkok; หลักสูตรสิงคโปร์ ประมาณการ 2024/25,2024,https://www.sisb.ac.th
+Assumption College (อัสสัมชัญ),elementary,TH,private,6,11,60000,60000,THB,โรงเรียนคาทอลิกชาย; ประมาณการ 2024,2024,https://www.assumption.ac.th
+Assumption College (อัสสัมชัญ),middle_school,TH,private,12,14,70000,70000,THB,ประมาณการ 2024,2024,https://www.assumption.ac.th
+Assumption College (อัสสัมชัญ),high_school,TH,private,15,18,80000,80000,THB,ประมาณการ 2024,2024,https://www.assumption.ac.th
+Sacred Heart Convent (เซนต์โยเซฟ),elementary,TH,private,6,11,50000,50000,THB,โรงเรียนคาทอลิกหญิง; ประมาณการ 2024,2024,https://www.shconvent.ac.th
+Sacred Heart Convent (เซนต์โยเซฟ),middle_school,TH,private,12,14,60000,60000,THB,ประมาณการ 2024,2024,https://www.shconvent.ac.th
+Sacred Heart Convent (เซนต์โยเซฟ),high_school,TH,private,15,18,65000,65000,THB,ประมาณการ 2024,2024,https://www.shconvent.ac.th
+KVIS – Kamnoetvidya Science Academy,high_school,TH,private,15,18,180000,180000,THB,โรงเรียนวิทย์ PTT; ประมาณการ 2024,2024,https://www.kvis.ac.th
+Denla British School,kindergarten,TH,private,3,5,200000,200000,THB,ประมาณการ 2024/25,2024,https://www.denlabritish.com
+Denla British School,elementary,TH,private,6,11,300000,300000,THB,ประมาณการ 2024/25,2024,https://www.denlabritish.com
+Denla British School,middle_school,TH,private,12,14,350000,350000,THB,ประมาณการ 2024/25,2024,https://www.denlabritish.com
+Denla British School,high_school,TH,private,15,18,400000,400000,THB,ประมาณการ 2024/25,2024,https://www.denlabritish.com
+Triam Udom Suksa (เตรียมอุดมศึกษา),high_school,TH,government,15,18,5000,5000,THB,โรงเรียนรัฐบาลชั้นนำ; ค่าเล่าเรียนต่ำมาก,2024,https://www.triamudom.ac.th
+Mahidol Wittayanusorn (มหิดลวิทยานุสรณ์),high_school,TH,government,15,18,12000,12000,THB,โรงเรียนวิทยาศาสตร์ชั้นนำ; ค่าเล่าเรียนต่ำ,2024,https://www.mwit.ac.th
+จุฬาลงกรณ์มหาวิทยาลัย (หลักสูตรไทย),bachelor,TH,government,18,22,30000,30000,THB,ค่าเล่าเรียนเฉลี่ยต่อปี; ประมาณการ 2024,2024,https://www.chula.ac.th
+มหาวิทยาลัยมหิดล (หลักสูตรไทย),bachelor,TH,government,18,22,35000,35000,THB,ค่าเล่าเรียนเฉลี่ยต่อปี; ประมาณการ 2024,2024,https://www.mahidol.ac.th
+มหาวิทยาลัยธรรมศาสตร์ (หลักสูตรไทย),bachelor,TH,government,18,22,25000,25000,THB,ค่าเล่าเรียนเฉลี่ยต่อปี; ประมาณการ 2024,2024,https://www.tu.ac.th
+มหาวิทยาลัยเกษตรศาสตร์ (หลักสูตรไทย),bachelor,TH,government,18,22,22000,22000,THB,ค่าเล่าเรียนเฉลี่ยต่อปี; ประมาณการ 2024,2024,https://www.ku.ac.th
+มหาวิทยาลัยขอนแก่น (หลักสูตรไทย),bachelor,TH,government,18,22,20000,20000,THB,ค่าเล่าเรียนเฉลี่ยต่อปี; ประมาณการ 2024,2024,https://www.kku.ac.th
+มหาวิทยาลัยเชียงใหม่ (หลักสูตรไทย),bachelor,TH,government,18,22,22000,22000,THB,ค่าเล่าเรียนเฉลี่ยต่อปี; ประมาณการ 2024,2024,https://www.cmu.ac.th
+MUIC – Mahidol Univ. International College,bachelor,TH,government,18,22,600000,600000,THB,หลักสูตรนานาชาติ; ประมาณการ 2024/25,2024,https://muic.mahidol.ac.th
+MUIC – Mahidol Univ. International College,master,TH,government,23,24,660000,660000,THB,หลักสูตรนานาชาติ; ประมาณการ 2024/25,2024,https://muic.mahidol.ac.th
+CU – Chulalongkorn Intl Programs,bachelor,TH,government,18,22,540000,540000,THB,หลักสูตรนานาชาติ; ประมาณการ 2024/25,2024,https://www.inter.chula.ac.th
+ABAC – Assumption Univ. (Intl),bachelor,TH,private,18,22,220000,220000,THB,หลักสูตรนานาชาติ; ประมาณการ 2024/25,2024,https://www.au.edu
+Bangkok Univ. (Intl Program),bachelor,TH,private,18,22,180000,180000,THB,หลักสูตรนานาชาติ; ประมาณการ 2024/25,2024,https://www.bu.ac.th
+MIT / Harvard / Stanford (Top 5 US),bachelor,US,foreign_university,18,22,2450000,70000,USD,ค่าเล่าเรียน+ค่าครองชีพ; USD 70k/yr × 35 THB,2024,https://college.harvard.edu/financial-aid/tuition-fees
+UC Berkeley / UCLA (UC System),bachelor,US,foreign_university,18,22,1680000,48000,USD,ต่างรัฐ; ค่าเล่าเรียน+ค่าครองชีพ,2024,https://admission.universityofcalifornia.edu/tuition-financial-aid/
+State University (In-State US),bachelor,US,foreign_university,18,22,875000,25000,USD,ในรัฐ; ค่าเล่าเรียน+ค่าครองชีพ,2024,https://bigfuture.collegeboard.org/pay-for-college/college-costs/college-costs-calculator
+Top US MBA (Harvard/Wharton/Booth),master,US,foreign_university,23,25,2800000,80000,USD,MBA 2 ปี; รวมค่าครองชีพ,2024,https://www.hbs.edu/mba/financial-aid/Pages/tuition.aspx
+US Top-10 Master's Program,master,US,foreign_university,23,24,2100000,60000,USD,1–2 ปี; รวมค่าครองชีพ,2024,https://www.usnews.com/best-graduate-schools
+US Community College → Transfer,bachelor,US,foreign_university,18,22,490000,14000,USD,2+2 pathway; ค่าเล่าเรียนเฉลี่ย,2024,https://bigfuture.collegeboard.org
+Oxford / Cambridge / LSE,bachelor,UK,foreign_university,18,21,1380000,30000,GBP,ต่างชาติ; ค่าเล่าเรียน GBP 30k + ค่าครองชีพ,2024,https://www.ox.ac.uk/admissions/undergraduate/fees-and-funding/tuition-fees
+UK Russell Group (Top 24),bachelor,UK,foreign_university,18,21,920000,20000,GBP,ค่าเล่าเรียน GBP 20k + ค่าครองชีพ,2024,https://www.russellgroup.ac.uk
+UK Top MBA (LBS / Oxford Saïd),master,UK,foreign_university,23,24,1840000,40000,GBP,1 ปี MBA; ค่าเล่าเรียน GBP 40k,2024,https://www.london.edu/programmes/mba
+UK A-Level / Sixth Form College,high_school,UK,international,16,18,920000,20000,GBP,2 ปี A-Level; ค่าเล่าเรียน GBP 20k/yr,2024,https://www.ucas.com
+ANU / Melbourne / Sydney (Go8),bachelor,AU,foreign_university,18,22,990000,45000,AUD,AUD 45k/yr × 22 THB + ค่าครองชีพ,2024,https://www.anu.edu.au/study/fees
+Non-Go8 Australian University,bachelor,AU,foreign_university,18,22,700000,32000,AUD,AUD 32k/yr + ค่าครองชีพ; ประมาณการ,2024,https://www.studyaustralia.gov.au/en/plan-your-studies/fees-and-costs
+Australian Master's (1–2 yr),master,AU,foreign_university,23,24,880000,40000,AUD,AUD 40k/yr × 22 THB,2024,https://www.studyaustralia.gov.au/en/plan-your-studies/fees-and-costs
+Australian High School (Yr 11–12),high_school,AU,international,16,18,616000,28000,AUD,AUD 28k/yr รวมค่าที่พัก,2024,https://www.studyaustralia.gov.au
+Australian Secondary (Yr 8–10),middle_school,AU,international,13,15,528000,24000,AUD,AUD 24k/yr รวมค่าที่พัก,2024,https://www.studyaustralia.gov.au
+NUS / NTU (National Universities SG),bachelor,SG,foreign_university,18,22,625000,24000,SGD,SGD 24k/yr × 26 THB; ต่างชาติ,2024,https://www.nus.edu.sg/registrar/administrative-policies-procedures/undergraduate/financial-matters/tuition-fees
+SMU – Singapore Management Univ.,bachelor,SG,foreign_university,18,22,676000,26000,SGD,SGD 26k/yr × 26 THB; ต่างชาติ,2024,https://www.smu.edu.sg/admissions/fees-scholarships/fees
+NUS / NTU MBA,master,SG,foreign_university,23,24,780000,30000,SGD,SGD 30k/yr × 26 THB,2024,https://bschool.nus.edu.sg/mba/
+United World College South East Asia (SG),middle_school,SG,international,12,14,780000,30000,SGD,UWCSEA; SGD 30k/yr × 26 THB,2024,https://www.uwcsea.edu.sg
+United World College South East Asia (SG),high_school,SG,international,15,18,910000,35000,SGD,UWCSEA IB Diploma; SGD 35k/yr × 26 THB,2024,https://www.uwcsea.edu.sg
+University of Tokyo / Kyoto (National JP),bachelor,JP,foreign_university,18,22,200000,535800,JPY,¥535800/yr × 0.23 THB; ค่าเล่าเรียนเท่ากับนักศึกษาญี่ปุ่น,2024,https://www.u-tokyo.ac.jp/en/admissions/index.html
+Waseda / Keio (Private JP),bachelor,JP,foreign_university,18,22,300000,1300000,JPY,¥1.3M/yr × 0.23 THB; เอกชน,2024,https://www.waseda.jp/top/en
+Japan Master's (National University),master,JP,foreign_university,23,25,220000,950000,JPY,¥950k/yr × 0.23 THB,2024,https://www.jasso.or.jp/en/
+Japan High School (Public),high_school,JP,government,16,18,100000,430000,JPY,¥430k/yr รวมค่าครองชีพเบื้องต้น,2024,https://www.mext.go.jp/en/
+Japan High School (Private International),high_school,JP,private,16,18,350000,1500000,JPY,¥1.5M/yr × 0.23 THB,2024,https://www.jasso.or.jp/en/
+LMU / TU Munich / Heidelberg,bachelor,DE,foreign_university,18,22,490000,14000,EUR,ค่าเล่าเรียนต่ำมาก + ค่าครองชีพ EUR 14k/yr × 35 THB,2024,https://www.studying-in-germany.org/tuition-fees-germany/
+Germany Master's (Eng. / MBA),master,DE,foreign_university,23,25,525000,15000,EUR,รวมค่าครองชีพ; ค่าเล่าเรียนต่ำมาก,2024,https://www.studying-in-germany.org/tuition-fees-germany/
+Peking University / Tsinghua (Top CN),bachelor,CN,foreign_university,18,22,340000,70833,CNY,¥70833/yr (~¥30k ค่าเรียน + ¥40k ครองชีพ) × 4.8,2024,https://www.campuschina.org
+Fudan / Zhejiang / SJTU (National CN),bachelor,CN,foreign_university,18,22,280000,58333,CNY,¥58333/yr รวมค่าครองชีพ × 4.8 THB,2024,https://www.campuschina.org
+Top CN University MBA (CEIBS/PKU/THU),master,CN,foreign_university,23,25,380000,79167,CNY,¥79167/yr รวมค่าครองชีพ × 4.8 THB,2024,https://www.ceibs.edu
+China Master's (National University),master,CN,foreign_university,23,25,250000,52083,CNY,¥52083/yr รวมค่าครองชีพ × 4.8 THB,2024,https://www.campuschina.org
+Western Academy of Beijing (WAB),elementary,CN,international,6,11,700000,20000,USD,USD 20k/yr × 35 THB; โรงเรียนนานาชาติในปักกิ่ง,2024,https://www.wab.edu
+Western Academy of Beijing (WAB),middle_school,CN,international,12,14,840000,24000,USD,USD 24k/yr × 35 THB,2024,https://www.wab.edu
+Western Academy of Beijing (WAB),high_school,CN,international,15,18,980000,28000,USD,USD 28k/yr × 35 THB; IB Diploma,2024,https://www.wab.edu
+Shanghai American School (SAS),elementary,CN,international,6,11,770000,22000,USD,USD 22k/yr × 35 THB; โรงเรียนนานาชาติในเซี่ยงไฮ้,2024,https://www.saschina.org
+Shanghai American School (SAS),high_school,CN,international,15,18,1050000,30000,USD,USD 30k/yr × 35 THB,2024,https://www.saschina.org

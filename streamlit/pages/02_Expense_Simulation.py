@@ -6,12 +6,59 @@ import pandas as pd
 import altair as alt
 
 from strings import S, SC, edu_level_label
+from simulation_core import SavingPlan, Assumptions, simulate_education_plan
+from database import save_draft as db_save_draft
+from presets import normalize_cust_id, cust_id_validation_error
+from state import draft_set, _widget_key, require_login
+
+require_login()
 
 st.set_page_config(
     page_title=S("p2", "page_title"),
     page_icon="📊",
     layout="wide",
 )
+
+
+# ============================================================
+# HELPER: sync Page-2 expander widget values into draft + clear
+# Page-1 widget buffers. Called before navigation so values the
+# user typed (but didn't click "Re-simulate" on) still propagate
+# back to Page 1.
+# ============================================================
+def _sync_p2_assump_to_draft_and_clear_buffers():
+    if "p2_assump_initial" not in st.session_state:
+        return  # Expander never rendered → nothing to sync.
+
+    _v_initial = st.session_state.get("p2_assump_initial")
+    _v_monthly = st.session_state.get("p2_assump_monthly")
+    _v_gen_pct = st.session_state.get("p2_assump_gen_infl")
+    _v_edu_pct = st.session_state.get("p2_assump_edu_infl")
+    _v_inv_pct = st.session_state.get("p2_assump_inv_return")
+
+    if _v_initial is not None:
+        draft_set("initial_savings", float(_v_initial))
+    if _v_monthly is not None:
+        draft_set("monthly_contribution", float(_v_monthly))
+    if _v_gen_pct is not None:
+        draft_set("general_inflation_rate", round(float(_v_gen_pct) / 100, 8))
+    if _v_edu_pct is not None:
+        draft_set("education_inflation_rate", round(float(_v_edu_pct) / 100, 8))
+    if _v_inv_pct is not None:
+        draft_set("investment_return_rate", round(float(_v_inv_pct) / 100, 8))
+
+    for _f in [
+        "initial_savings",
+        "monthly_contribution",
+        "general_inflation_rate",
+        "general_inflation_rate__pct_display",
+        "education_inflation_rate",
+        "education_inflation_rate__pct_display",
+        "investment_return_rate",
+        "investment_return_rate__pct_display",
+    ]:
+        st.session_state.pop(_widget_key(_f), None)
+
 
 # ============================================================
 # SIDEBAR: WORKFLOW PROGRESS + NAVIGATION
@@ -23,10 +70,12 @@ with st.sidebar:
     st.markdown(S("sidebar", "step3"))
     st.markdown("---")
 
-    if st.button(S("p2", "btn_back"), use_container_width=True):
+    if st.button(S("p2", "btn_back"), width="stretch"):
+        _sync_p2_assump_to_draft_and_clear_buffers()
         st.switch_page("01_User_Information.py")
 
-    if st.button(S("p2", "btn_next"), use_container_width=True, type="primary"):
+    if st.button(S("p2", "btn_next"), width="stretch", type="primary"):
+        _sync_p2_assump_to_draft_and_clear_buffers()
         st.switch_page("pages/03_Investment_Planning.py")
 
 # ============================================================
@@ -111,7 +160,6 @@ def _get_first_shortfall_year(summary_df):
 # ============================================================
 st.title(S("p2", "title"))
 st.caption(S("p2", "caption"))
-# st.markdown("---")
 
 # ============================================================
 # SECTION 1: KPI CARDS
@@ -154,6 +202,191 @@ k4.metric(S("p2", "kpi_peak_expense"), f"฿{_fmt(peak_expense)}",
 k5.metric(S("p2", "kpi_invest_return"), f"฿{_fmt(total_return)}")
 
 st.markdown("---")
+
+# ============================================================
+# INTERACTIVE: ADJUST SIMULATION ASSUMPTIONS (no DB save)
+# ============================================================
+_sp_obj = st.session_state.get("saving_plan_obj")
+_as_obj = st.session_state.get("assumptions_obj")
+_children_obj = st.session_state.get("children_obj")
+_parent_obj = st.session_state.get("parent_expenses_obj")
+
+if _sp_obj is not None and _as_obj is not None and _children_obj is not None:
+    # Sticky expander: once the user touches any assumption input or
+    # clicks re-simulate, keep the expander open across reruns so the
+    # editing flow doesn't visually collapse on each interaction.
+    def _mark_assump_expanded():
+        st.session_state["p2_assump_expanded"] = True
+
+    _assump_expanded = st.session_state.get("p2_assump_expanded", False)
+
+    with st.expander(S("p2", "assump_expander"), expanded=_assump_expanded):
+        st.caption(S("p2", "assump_caption"))
+
+        _sa1, _sa2 = st.columns(2)
+        with _sa1:
+            _new_initial = st.number_input(
+                S("p1", "label_initial_savings"),
+                value=float(_sp_obj.initial_savings),
+                min_value=0.0,
+                step=10_000.0,
+                format="%.0f",
+                key="p2_assump_initial",
+                on_change=_mark_assump_expanded,
+            )
+        with _sa2:
+            _new_monthly = st.number_input(
+                S("p1", "label_monthly_contrib"),
+                value=float(_sp_obj.monthly_contribution),
+                min_value=0.0,
+                step=1000.0,
+                format="%.0f",
+                key="p2_assump_monthly",
+                on_change=_mark_assump_expanded,
+            )
+
+        _ra1, _ra2, _ra3 = st.columns(3)
+        with _ra1:
+            _new_gen_pct = st.number_input(
+                S("p1", "label_general_infl"),
+                value=round(float(_as_obj.general_inflation_rate) * 100, 4),
+                min_value=0.0,
+                max_value=30.0,
+                step=0.5,
+                format="%.1f",
+                help=S("p1", "label_general_infl_help"),
+                key="p2_assump_gen_infl",
+                on_change=_mark_assump_expanded,
+            )
+        with _ra2:
+            _new_edu_pct = st.number_input(
+                S("p1", "label_edu_infl"),
+                value=round(float(_as_obj.education_inflation_rate) * 100, 4),
+                min_value=0.0,
+                max_value=30.0,
+                step=0.5,
+                format="%.1f",
+                help=S("p1", "label_edu_infl_help"),
+                key="p2_assump_edu_infl",
+                on_change=_mark_assump_expanded,
+            )
+        with _ra3:
+            _new_inv_pct = st.number_input(
+                S("p1", "label_invest_return"),
+                value=round(float(_as_obj.investment_return_rate) * 100, 4),
+                min_value=0.0,
+                max_value=50.0,
+                step=0.5,
+                format="%.1f",
+                help=S("p1", "label_invest_return_help"),
+                key="p2_assump_inv_return",
+                on_change=_mark_assump_expanded,
+            )
+
+        _rerun_clicked = st.button(
+            S("p2", "assump_btn_rerun"),
+            type="primary",
+            width="stretch",
+            key="p2_assump_rerun_btn",
+        )
+
+        # One-shot success toast — appears inside the expander, directly
+        # below the re-simulate button (flag is set just before st.rerun()).
+        if st.session_state.pop("p2_assump_just_reran", False):
+            st.success(S("p2", "assump_rerun_success"))
+
+        if _rerun_clicked:
+            st.session_state["p2_assump_expanded"] = True
+
+            # ── Validate cust_id before doing anything else ──
+            _final_cid = normalize_cust_id(
+                st.session_state.get("draft", {}).get("cust_id", "")
+            )
+            _cid_err = cust_id_validation_error(_final_cid)
+            if _cid_err:
+                st.error(_cid_err)
+                st.stop()
+
+            # ── Convert raw widget values to model types ──
+            _gen_decimal = round(float(_new_gen_pct) / 100, 8)
+            _edu_decimal = round(float(_new_edu_pct) / 100, 8)
+            _inv_decimal = round(float(_new_inv_pct) / 100, 8)
+
+            # ── Sync new values back to draft (source of truth) ──
+            # Draft stores DECIMAL for percent fields (0.03 = 3%).
+            draft_set("initial_savings", float(_new_initial))
+            draft_set("monthly_contribution", float(_new_monthly))
+            draft_set("general_inflation_rate", _gen_decimal)
+            draft_set("education_inflation_rate", _edu_decimal)
+            draft_set("investment_return_rate", _inv_decimal)
+
+            # ── Clear Page-1 widget buffers so they refresh from new draft ──
+            # Page 1's persistent widgets read from "w__{field}" (and from
+            # "w__{field}__pct_display" for percent inputs). On first render
+            # after navigation, ensure_widget_buffer ONLY populates the buffer
+            # if the key is missing — so we must delete stale buffers here
+            # to force a refresh on Page 1. This mirrors the proven pattern
+            # used by apply_loaded_draft_to_state() when importing from DB.
+            _fields_to_refresh = [
+                "initial_savings",
+                "monthly_contribution",
+                "general_inflation_rate",
+                "general_inflation_rate__pct_display",
+                "education_inflation_rate",
+                "education_inflation_rate__pct_display",
+                "investment_return_rate",
+                "investment_return_rate__pct_display",
+            ]
+            for _f in _fields_to_refresh:
+                st.session_state.pop(_widget_key(_f), None)
+
+            _new_sp = SavingPlan(
+                initial_savings=float(_new_initial),
+                monthly_contribution=float(_new_monthly),
+                saving_start_year=_sp_obj.saving_start_year,
+                annual_topups=_sp_obj.annual_topups,
+            )
+            _new_as = Assumptions(
+                start_year=_as_obj.start_year,
+                general_inflation_rate=_gen_decimal,
+                education_inflation_rate=_edu_decimal,
+                investment_return_rate=_inv_decimal,
+                return_compound_mode=_as_obj.return_compound_mode,
+                expense_timing=_as_obj.expense_timing,
+                open_recurring_default_years=_as_obj.open_recurring_default_years,
+                inflation_base_year=_as_obj.inflation_base_year,
+                auto_add_th_international_highschool_before_university=_as_obj.auto_add_th_international_highschool_before_university,
+                default_highschool_start_age=_as_obj.default_highschool_start_age,
+                default_highschool_end_age=_as_obj.default_highschool_end_age,
+            )
+
+            try:
+                _exp_df, _sav_df, _sum_df = simulate_education_plan(
+                    children=_children_obj,
+                    saving_plan=_new_sp,
+                    assumptions=_new_as,
+                    parent_expenses=(_parent_obj or []),
+                )
+                st.session_state["expense_df"] = _exp_df
+                st.session_state["saving_df"] = _sav_df
+                st.session_state["summary_df"] = _sum_df
+                st.session_state["saving_plan_obj"] = _new_sp
+                st.session_state["assumptions_obj"] = _new_as
+
+                # ── Persist updated draft to DB ──
+                try:
+                    db_save_draft(
+                        _final_cid,
+                        dict(st.session_state["draft"]),
+                        staff_id=st.session_state.get("staff_id", ""),
+                    )
+                except Exception as _save_err:
+                    st.warning(S("p1", "save_warn", error=_save_err))
+
+                st.session_state["p2_assump_just_reran"] = True
+                st.rerun()
+            except Exception as e:
+                st.error(S("p2", "assump_rerun_failed", error=e))
 
 # ============================================================
 # SECTION 2: PORTFOLIO TRAJECTORY
@@ -220,8 +453,24 @@ line_labels = (
     )
 )
 
+# Series-name labels at the last point of each line so the user can
+# identify which line is which without relying solely on the legend.
+_series_name_df = (
+    chart_long.sort_values("year").groupby("label", as_index=False).tail(1)
+)
+series_name_labels = (
+    alt.Chart(_series_name_df)
+    .mark_text(align="left", dx=8, fontSize=12, fontWeight="bold")
+    .encode(
+        x=alt.X("year:O"),
+        y=alt.Y("value:Q"),
+        text=alt.Text("label:N"),
+        color=alt.Color("label:N", scale=dark_color_scale, legend=None),
+    )
+)
+
 first_shortfall_year = _get_first_shortfall_year(summary_df)
-chart = base + line_labels
+chart = base + line_labels + series_name_labels
 
 if first_shortfall_year:
     rule_df = pd.DataFrame({"year": [first_shortfall_year]})
@@ -234,13 +483,13 @@ if first_shortfall_year:
         .mark_text(text=S("p2", "shortfall_marker"), color="red", align="left", dx=6, dy=-8, fontWeight="bold")
         .encode(x="year:O", y=alt.value(20))
     )
-    chart = base + line_labels + rule + rule_text
+    chart = base + line_labels + series_name_labels + rule + rule_text
 
 st.altair_chart(
     chart.properties(height=380)
     .configure_axis(labelFontSize=12, titleFontSize=13)
     .configure_legend(titleFontSize=12, labelFontSize=11),
-    use_container_width=True,
+    width="stretch",
 )
 
 st.markdown("---")
@@ -266,8 +515,12 @@ else:
     expense_chart_df["year"] = pd.to_numeric(expense_chart_df["year"], errors="coerce")
     expense_chart_df["inflated_amount"] = pd.to_numeric(expense_chart_df["inflated_amount"], errors="coerce").fillna(0)
     expense_chart_df["category"] = expense_chart_df["category"].fillna("Unknown").astype(str)
-    expense_chart_df["sub_category"] = (
-        expense_chart_df["sub_category"].fillna("Unknown").astype(str).apply(edu_level_label)
+    expense_chart_df["sub_category"] = expense_chart_df["sub_category"].fillna("Unknown").astype(str)
+    # Only translate sub_category for education rows; for child-extra and parent
+    # expenses sub_category is the user-input name and must be shown as-is.
+    _is_edu_mask = expense_chart_df["category"].str.lower().str.contains("education")
+    expense_chart_df.loc[_is_edu_mask, "sub_category"] = (
+        expense_chart_df.loc[_is_edu_mask, "sub_category"].apply(edu_level_label)
     )
     expense_chart_df = expense_chart_df.dropna(subset=["year"])
     expense_chart_df["year_str"] = expense_chart_df["year"].astype(int).astype(str)
@@ -279,6 +532,27 @@ else:
     sub_cat_order = sorted(agg["sub_category"].unique().tolist())
     y_max = max(float(total_df["total"].max()) * 1.12, 1.0)
 
+    # Education-level order map (sub_category values are already display labels)
+    _EDU_LEVEL_ORDER_KEYS = [
+        "kindergarten", "elementary", "middle_school",
+        "high_school", "bachelor", "master", "doctor", "other",
+    ]
+    _edu_label_to_order = {edu_level_label(k): i for i, k in enumerate(_EDU_LEVEL_ORDER_KEYS)}
+
+    def _sub_cat_order_idx(row):
+        if "education" in str(row["category"]).lower():
+            return _edu_label_to_order.get(str(row["sub_category"]), 999)
+        return 999
+
+    agg["order_idx"] = agg.apply(_sub_cat_order_idx, axis=1)
+
+    legend_order = (
+        agg.groupby("sub_category", as_index=False)
+        .agg(order_idx=("order_idx", "min"), total=("inflated_amount", "sum"))
+        .sort_values(["order_idx", "total"], ascending=[True, False])["sub_category"]
+        .tolist()
+    )
+
     # ── stacked bar chart (col 1) ──
     bars = (
         alt.Chart(agg)
@@ -287,11 +561,12 @@ else:
             x=alt.X("year_str:N", title=S("p2", "axis_year"), sort=year_order),
             y=alt.Y("inflated_amount:Q", title=S("p2", "axis_amount"), stack="zero",
                     scale=alt.Scale(domain=[0, y_max]), axis=alt.Axis(format=",.0f")),
-            color=alt.Color("sub_category:N", title=S("p2", "legend_category"), sort=sub_cat_order),
+            color=alt.Color("sub_category:N", title=S("p2", "legend_category"), sort=legend_order),
+            order=alt.Order("order_idx:Q", sort="ascending"),
             tooltip=[
                 alt.Tooltip("year_str:N", title=S("p2", "axis_year")),
                 alt.Tooltip("category:N", title=S("p2", "legend_category")),
-                alt.Tooltip("sub_category:N", title=S("p2", "legend_category")),
+                alt.Tooltip("sub_category:N", title="Sub-category"),
                 alt.Tooltip("inflated_amount:Q", title=S("p2", "axis_amount"), format=",.0f"),
             ],
         )
@@ -330,6 +605,21 @@ else:
     cat_totals["label_text"] = cat_totals["inflated_amount"].apply(_fmt_compact)
     x_max_cat = max(float(cat_totals["inflated_amount"].max()) * 1.25, 1.0)
 
+    # For education categories, sort sub-category segments by education level;
+    # for other categories, fall back to amount-based ordering.
+    _EDU_LEVEL_ORDER_KEYS = [
+        "kindergarten", "elementary", "middle_school",
+        "high_school", "bachelor", "master", "doctor", "other",
+    ]
+    _edu_label_to_order = {edu_level_label(k): i for i, k in enumerate(_EDU_LEVEL_ORDER_KEYS)}
+
+    def _sub_cat_order_idx(row):
+        if "education" in str(row["category"]).lower():
+            return _edu_label_to_order.get(str(row["sub_category"]), 999)
+        return 999
+
+    exp_agg_sub["order_idx"] = exp_agg_sub.apply(_sub_cat_order_idx, axis=1)
+
     cat_bars = (
         alt.Chart(exp_agg_sub)
         .mark_bar()
@@ -340,9 +630,10 @@ else:
                     stack="zero", scale=alt.Scale(domain=[0, x_max_cat]),
                     axis=alt.Axis(format=",.0f")),
             color=alt.Color("sub_category:N", sort=sub_cat_order, legend=None),
+            order=alt.Order("order_idx:Q", sort="ascending"),
             tooltip=[
                 alt.Tooltip("category:N", title=S("p2", "legend_category")),
-                alt.Tooltip("sub_category:N", title=S("p2", "legend_category")),
+                alt.Tooltip("sub_category:N", title="Sub-category"),
                 alt.Tooltip("inflated_amount:Q", title=S("p2", "axis_amount"), format=",.0f"),
             ],
         )
@@ -368,7 +659,7 @@ else:
         st.altair_chart(
             chart_cat
             .configure_axis(labelFontSize=11, titleFontSize=12),
-            use_container_width=True,
+            width="stretch",
         )
     with _ec2:
         st.caption(S("p2", "chart2_caption"))
@@ -376,7 +667,7 @@ else:
             chart_exp
             .configure_axis(labelFontSize=12, titleFontSize=13)
             .configure_legend(titleFontSize=12, labelFontSize=11),
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -445,7 +736,7 @@ with _fc1:
         (bars_c + labels_c)
         .properties(height=_CHART_HEIGHT)
         .configure_axis(labelFontSize=11, titleFontSize=12),
-        use_container_width=True,
+        width="stretch",
     )
 
 with _fc2:
@@ -522,7 +813,7 @@ with _fc2:
         chart_funding
         .configure_axis(labelFontSize=11, titleFontSize=12)
         .configure_legend(titleFontSize=11, labelFontSize=10),
-        use_container_width=True,
+        width="stretch",
     )
 
 st.markdown("---")
@@ -533,18 +824,28 @@ st.markdown("---")
 # 📊 ตารางข้อมูล
 st.subheader("ตารางข้อมูล")
 with st.expander(S("p2", "tbl_summary"), expanded=False):
+#     if summary_df.empty:
+#         st.info(S("p2", "info_no_summary"))
+#     else:
+#         display_df = summary_df.copy()
+#         display_df.columns = [c.capitalize() for c in display_df.columns]
+#         st.dataframe(display_df, width="stretch", hide_index=True)
     if summary_df.empty:
         st.info(S("p2", "info_no_summary"))
     else:
         display_df = summary_df.copy()
         display_df.columns = [c.capitalize() for c in display_df.columns]
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        # Arrow ต้องการ column ที่ type เดียวกัน — cast object columns เป็น str
+        for _col in display_df.columns:
+            if display_df[_col].dtype == object:
+                display_df[_col] = display_df[_col].astype(str)
+        st.dataframe(display_df, width="stretch", hide_index=True)
 
 with st.expander(S("p2", "tbl_expense"), expanded=False):
     if expense_df.empty:
         st.info(S("p2", "info_no_expense"))
     else:
-        st.dataframe(expense_df, use_container_width=True, hide_index=True)
+        st.dataframe(expense_df, width="stretch", hide_index=True)
         st.download_button(
             S("p2", "dl_expense"),
             expense_df.to_csv(index=False).encode("utf-8-sig"),
@@ -553,7 +854,7 @@ with st.expander(S("p2", "tbl_expense"), expanded=False):
         )
 
 with st.expander(S("p2", "tbl_saving"), expanded=False):
-    st.dataframe(saving_df, use_container_width=True, hide_index=True)
+    st.dataframe(saving_df, width="stretch", hide_index=True)
     st.download_button(
         S("p2", "dl_saving"),
         saving_df.to_csv(index=False).encode("utf-8-sig"),
@@ -568,5 +869,6 @@ st.markdown("---")
 # ============================================================
 st.markdown(S("p2", "cta_header"))
 st.caption(S("p2", "cta_caption"))
-if st.button(S("p2", "cta_btn"), type="primary", use_container_width=True):
+if st.button(S("p2", "cta_btn"), type="primary", width="stretch"):
+    _sync_p2_assump_to_draft_and_clear_buffers()
     st.switch_page("pages/03_Investment_Planning.py")
