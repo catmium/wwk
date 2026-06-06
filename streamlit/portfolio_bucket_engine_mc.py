@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
+from scipy.stats import norm, t as student_t
 
 from portfolio_bucket_engine import (
     BucketConfig,
@@ -107,6 +108,9 @@ DEFAULT_INTRA_BUCKET_CORRELATION: Dict[str, float] = {
     "liquidity": 0.1,
     "stability": 0.3,
     "growth": 0.5,
+    # Thai 2-bucket scheme (load-bearing keys used throughout MC engine):
+    "สำหรับค่าใช้จ่ายระยะสั้น": 0.1,   # short / bill-paying bucket (years 1-3)
+    "สำหรับค่าใช้จ่ายระยะยาว": 0.3,    # long / growth bucket (years 4-∞)
 }
 
 
@@ -392,13 +396,13 @@ def _resolve_intra_bucket_correlation(
     n_assets: int,
 ) -> np.ndarray:
     """
-    Build the (n_assets x n_assets) correlation matrix สำหรับ asset ภายใน bucket.
+    Build the (n_assets x n_assets) constant-off-diagonal correlation matrix
+    for assets ภายใน bucket.
 
-    Resolution order:
-      1) ถ้า model.correlation_matrix ระบุ → ใช้ตามนั้น (ต้อง shape ตรง)
-      2) ถ้า model.intra_bucket_correlation ระบุ → constant off-diag
-      3) fallback → DEFAULT_INTRA_BUCKET_CORRELATION ตาม bucket_name
-         (default 0.3 ถ้า bucket_name ไม่อยู่ใน map)
+    Correlation is hard-coded per bucket via DEFAULT_INTRA_BUCKET_CORRELATION
+    (default 0.3 ถ้า bucket_name ไม่อยู่ใน map). Per-model overrides
+    (correlation_matrix, intra_bucket_correlation) are intentionally NOT honored —
+    correlation is a fixed engine assumption, not a user-tunable knob.
 
     Off-diagonal values are clamped to (-0.999, 0.999) to keep the resulting
     covariance matrix strictly positive definite for numpy.multivariate_normal.
@@ -408,20 +412,7 @@ def _resolve_intra_bucket_correlation(
     if n_assets == 1:
         return np.ones((1, 1), dtype=float)
 
-    if model.correlation_matrix is not None:
-        m = np.asarray(model.correlation_matrix, dtype=float)
-        if m.shape != (n_assets, n_assets):
-            raise ValueError(
-                f"bucket={model.bucket_name}: correlation_matrix shape {m.shape} "
-                f"does not match n_assets={n_assets}"
-            )
-        return m
-
-    if model.intra_bucket_correlation is not None:
-        rho = float(model.intra_bucket_correlation)
-    else:
-        rho = float(DEFAULT_INTRA_BUCKET_CORRELATION.get(model.bucket_name, 0.3))
-
+    rho = float(DEFAULT_INTRA_BUCKET_CORRELATION.get(model.bucket_name, 0.3))
     rho = max(-0.999, min(0.999, rho))
     mat = np.full((n_assets, n_assets), rho, dtype=float)
     np.fill_diagonal(mat, 1.0)
@@ -438,22 +429,16 @@ def _sample_single_return(
     label: str = "",
 ) -> float:
     """
-    internal helper: sample 1 ครั้งจาก distribution ที่กำหนด แล้ว clip
+    internal helper: sample 1 ครั้งจาก student-t (df=5, hard-coded) แล้ว clip.
+
+    เฉพาะ "student_t" (default) และ "fixed" เท่านั้นที่รองรับ. "normal" จะถูก
+    treat เป็น student_t df=5 — engine hard-codes Student-t สำหรับทุก sample.
     """
     if distribution == "fixed":
         sampled = float(mean_return)
-
-    elif distribution == "normal":
-        sampled = float(rng.normal(loc=mean_return, scale=std_dev))
-
-    elif distribution == "student_t":
-        # df=5 (hardcoded) — fatter tails than normal, ใกล้เคียง equity return จริง
-        sampled = float(mean_return) + float(std_dev) * float(rng.standard_t(5))
-
     else:
-        raise ValueError(
-            f"Unsupported distribution '{distribution}' for '{label}'"
-        )
+        # student_t df=5 (hard-coded) — applies to "student_t" และ legacy "normal"
+        sampled = float(mean_return) + float(std_dev) * float(rng.standard_t(5))
 
     return float(_clip_return(sampled, min_return, max_return))
 
@@ -1898,10 +1883,28 @@ def _prepare_l2_static_context(
 
     total_expense_by_year_arr = expense_arr.sum(axis=1)
 
+    # OPT-1: Precompute rolling-window target weights for ALL years once.
+    # _compute_rebalance_targets depends only on path-invariant inputs, so we
+    # hoist it out of the per-path-per-year hot loop. Path simulation indexes
+    # this matrix as target_weights_matrix[yi] instead of recomputing.
+    target_weights_matrix = np.zeros((n_years, n_buckets), dtype=float)
+    for _yi in range(n_years):
+        target_weights_matrix[_yi] = _compute_rebalance_targets(
+            yi=_yi,
+            n_years=n_years,
+            total_expense_by_year_arr=total_expense_by_year_arr,
+            bucket_window_sizes=bucket_window_sizes,
+            n_buckets=n_buckets,
+        )
+
+    # year array as int64 for fast columnar buffer fills (avoids int() calls in loop)
+    years_arr = np.array(years, dtype=np.int64)
+
     return {
         "ordered_bucket_names": ordered_bucket_names,
         "bucket_to_idx": bucket_to_idx,
         "years": years,
+        "years_arr": years_arr,
         "year_to_idx": year_to_idx,
         "n_buckets": n_buckets,
         "n_years": n_years,
@@ -1910,6 +1913,7 @@ def _prepare_l2_static_context(
         "expense_arr": expense_arr,
         "bucket_window_sizes": bucket_window_sizes,
         "total_expense_by_year_arr": total_expense_by_year_arr,
+        "target_weights_matrix": target_weights_matrix,
     }
 
 
@@ -1976,6 +1980,22 @@ def _sample_returns_for_path(
 
     rng = _build_path_rng(mc_config, path_id)
 
+    # Gaussian copula refactor:
+    #   1) Draw correlated standard-normal z via MVN with intra-bucket corr (size=n_years)
+    #   2) Map to uniforms u = Phi(z) (norm.cdf)
+    #   3) Map uniforms to t df=5 marginals: x = t.ppf(u, df=5)
+    #   4) Scale per asset: r = mean + std * x
+    #   5) Clip per asset's min/max
+    #
+    # Properties:
+    #   - intra-bucket dependence preserved (rank correlation = Gaussian copula)
+    #   - marginals are Student-t df=5 (hard-coded, fat tails)
+    #   - years are iid (no autocorrelation): each row of MVN is independent
+    #   - buckets are independent (no cross-bucket correlation): drawn in separate
+    #     MVN calls from the same per-path RNG (seeded random_seed + path_id)
+    #   - "fixed" distribution short-circuits: constant mean, no sampling
+    DF_T = 5
+
     for bi, bucket_name in enumerate(ordered_bucket_names):
         m = model_map[bucket_name]
 
@@ -1994,29 +2014,32 @@ def _sample_returns_for_path(
             means = np.array([float(a.mean_return) for a in assets], dtype=float)
             stds = np.array([float(a.std_dev) for a in assets], dtype=float)
             corr = _resolve_intra_bucket_correlation(m, n_assets)
-            cov = np.outer(stds, stds) * corr
 
+            # Step 1: correlated standard normals z ~ N(0, corr), shape (n_years, n_assets)
+            mean_zero = np.zeros(n_assets, dtype=float)
             try:
-                samples = rng.multivariate_normal(mean=means, cov=cov, size=n_years)
+                z = rng.multivariate_normal(mean=mean_zero, cov=corr, size=n_years)
             except (ValueError, np.linalg.LinAlgError):
-                samples = means + stds * rng.standard_normal(size=(n_years, n_assets))
+                # Degenerate corr → fall back to independent standard normals; downstream
+                # mapping still produces valid (uncorrelated) Student-t marginals.
+                z = rng.standard_normal(size=(n_years, n_assets))
 
+            # Steps 2-3: Gaussian copula → uniforms → Student-t df=5 marginals
+            # Clip u away from {0, 1} to avoid ±inf from t.ppf at the tails.
+            u = norm.cdf(z)
+            u = np.clip(u, 1e-12, 1.0 - 1e-12)
+            t_samples = student_t.ppf(u, df=DF_T)
+
+            # Step 4: scale per asset (mean + std * x)
+            samples = means + stds * t_samples
+
+            # "fixed" override per asset (no sampling)
             for ai, asset in enumerate(assets):
                 if asset.distribution == "fixed":
                     samples[:, ai] = float(asset.mean_return)
-                elif asset.distribution == "student_t":
-                    # df=5 hardcoded; ใช้ independent standard_t (สลัด MVN correlation
-                    # สำหรับ asset นี้) เพื่อให้ได้ fat tails — ยอมแลก correlation กับ realism
-                    samples[:, ai] = (
-                        float(asset.mean_return)
-                        + float(asset.std_dev) * rng.standard_t(5, size=n_years)
-                    )
-                elif asset.distribution != "normal":
-                    raise ValueError(
-                        f"Unsupported distribution '{asset.distribution}' for "
-                        f"{bucket_name}/{asset.asset_name}"
-                    )
 
+            # Step 5: clip per asset min/max
+            for ai, asset in enumerate(assets):
                 lo = asset.min_return
                 hi = asset.max_return
                 if lo is not None or hi is not None:
@@ -2048,23 +2071,15 @@ def _sample_returns_for_path(
                         })
 
         else:
+            # Bucket-level path (no per-asset breakdown): single-marginal Student-t df=5.
             if m.distribution == "fixed":
                 samples = np.full(n_years, float(m.mean_return), dtype=float)
-            elif m.distribution == "normal":
-                samples = (
-                    float(m.mean_return)
-                    + float(m.std_dev) * rng.standard_normal(n_years)
-                )
-            elif m.distribution == "student_t":
-                # df=5 hardcoded — fat tails สำหรับ bucket-level return
-                samples = (
-                    float(m.mean_return)
-                    + float(m.std_dev) * rng.standard_t(5, size=n_years)
-                )
             else:
-                raise ValueError(
-                    f"Unsupported distribution '{m.distribution}' for '{bucket_name}'"
-                )
+                # student_t df=5 (hard-coded for all non-fixed). Use the copula stack
+                # for stylistic parity with the asset path: z → u → t.ppf → scale.
+                z = rng.standard_normal(size=n_years)
+                u = np.clip(norm.cdf(z), 1e-12, 1.0 - 1e-12)
+                samples = float(m.mean_return) + float(m.std_dev) * student_t.ppf(u, df=DF_T)
 
             lo = m.min_return
             hi = m.max_return
@@ -2126,6 +2141,44 @@ def _allocate_yearly_inflow_to_buckets_array(
         last_idx = bucket_to_idx[contribution_priority_names[-1]]
         alloc[last_idx] += remaining_amount
         remaining_amount = 0.0
+
+    return alloc
+
+
+def _allocate_yearly_inflow_to_buckets_array_fast(
+    inflow_amount: float,
+    remaining_required_arr: np.ndarray,
+    priority_idx_arr: np.ndarray,
+    n_buckets: int,
+) -> np.ndarray:
+    """
+    OPT-4: same logic + same arithmetic order as
+    _allocate_yearly_inflow_to_buckets_array(), but uses a precomputed integer
+    priority-index array (priority_idx_arr) — eliminates per-call string→idx
+    dict lookups in the hot loop. The numerical sequence (subtraction order,
+    branching) is preserved bit-for-bit.
+    """
+    if inflow_amount < 0:
+        raise ValueError("inflow_amount must be >= 0")
+
+    alloc = np.zeros(n_buckets, dtype=float)
+    remaining_amount = float(inflow_amount)
+    n_priority = priority_idx_arr.shape[0]
+
+    for i in range(n_priority):
+        idx = int(priority_idx_arr[i])
+        need = max(0.0, float(remaining_required_arr[idx]))
+
+        if remaining_amount <= 0:
+            break
+
+        give = min(remaining_amount, need)
+        alloc[idx] += give
+        remaining_amount -= give
+
+    if remaining_amount > 0:
+        last_idx = int(priority_idx_arr[n_priority - 1])
+        alloc[last_idx] += remaining_amount
 
     return alloc
 
@@ -2203,6 +2256,98 @@ def _resolve_shortfall_array(
         transfer_out_arr[ri] += shortfall
 
     return balances_arr, transfer_in_arr, transfer_out_arr
+
+
+def _resolve_shortfall_array_inplace(
+    target_idx: int,
+    balances_arr: np.ndarray,
+    n_buckets: int,
+    funding_rule,
+    xfer_in_buf: np.ndarray,
+    xfer_out_buf: np.ndarray,
+    residual_target_idx: Optional[int] = None,
+) -> None:
+    """
+    OPT-5/A: in-place variant of _resolve_shortfall_array.
+
+    Same logic + same arithmetic as _resolve_shortfall_array, but writes
+    transfer amounts directly into caller-supplied buffers (xfer_in_buf,
+    xfer_out_buf) via += accumulation, and mutates balances_arr in place.
+    Avoids two np.zeros(n_buckets) allocations per call in the MC hot loop.
+    """
+    if balances_arr[target_idx] >= 0:
+        return
+
+    if (not funding_rule.allow_cross_bucket_transfer) or (funding_rule.transfer_direction != "waterfall"):
+        return
+
+    shortfall = abs(float(balances_arr[target_idx]))
+
+    for donor_idx in range(target_idx + 1, n_buckets):
+        if shortfall <= 0:
+            break
+
+        available = max(0.0, float(balances_arr[donor_idx]))
+        if available <= 0:
+            continue
+
+        xfer = min(available, shortfall)
+        balances_arr[donor_idx] -= xfer
+        balances_arr[target_idx] += xfer
+        xfer_out_buf[donor_idx] += xfer
+        xfer_in_buf[target_idx] += xfer
+        shortfall -= xfer
+
+    if (
+        shortfall > 0
+        and residual_target_idx is not None
+        and int(residual_target_idx) != int(target_idx)
+    ):
+        ri = int(residual_target_idx)
+        balances_arr[target_idx] += shortfall
+        balances_arr[ri] -= shortfall
+        xfer_in_buf[target_idx] += shortfall
+        xfer_out_buf[ri] += shortfall
+
+
+def _apply_annual_rebalance_inplace(
+    balances: np.ndarray,
+    target_weights: np.ndarray,
+    n_buckets: int,
+    rebal_in_buf: np.ndarray,
+    rebal_out_buf: np.ndarray,
+) -> None:
+    """
+    OPT-5/A: in-place variant of _apply_annual_rebalance.
+
+    Same logic + same arithmetic + same branching as _apply_annual_rebalance,
+    but writes rebalance amounts into caller-supplied buffers (rebal_in_buf,
+    rebal_out_buf) via += accumulation, and mutates balances in place.
+    """
+    total = float(balances.sum())
+    if total <= 0:
+        return
+
+    target_amounts = target_weights * total
+    diff = balances - target_amounts  # positive = over-weight
+
+    total_over = max(float(diff[diff > 0].sum()), 0.0)
+    total_under = max(float((-diff[diff < 0]).sum()), 0.0)
+    transferable = min(total_over, total_under)
+
+    if transferable <= 0.01:
+        return
+
+    for bi in range(n_buckets):
+        if diff[bi] > 0:
+            give = float(diff[bi]) * (transferable / total_over) if total_over > 0 else 0.0
+            give = min(give, float(balances[bi]))
+            balances[bi] -= give
+            rebal_out_buf[bi] += give
+        elif diff[bi] < 0:
+            recv = float(-diff[bi]) * (transferable / total_under) if total_under > 0 else 0.0
+            balances[bi] += recv
+            rebal_in_buf[bi] += recv
 
 
 def _compute_rebalance_targets(
@@ -2322,6 +2467,8 @@ def _simulate_one_mc_path_l2(
     success_threshold: float,
     keep_path_detail: bool,
     keep_asset_detail: bool = False,
+    detail_buffers: Optional[Dict[str, np.ndarray]] = None,
+    path_offset: int = 0,
 ):
     """
     Level-2 optimized path simulation.
@@ -2342,12 +2489,24 @@ def _simulate_one_mc_path_l2(
     expense_arr = static_ctx["expense_arr"]
     bucket_window_sizes = static_ctx["bucket_window_sizes"]
     total_expense_by_year_arr = static_ctx["total_expense_by_year_arr"]
+    # OPT-1: precomputed rolling-window target weights (hoisted out of hot loop)
+    target_weights_matrix = static_ctx.get("target_weights_matrix")
+    # OPT-4: precomputed integer priority indices (avoid per-call dict lookup)
+    priority_idx_arr = static_ctx.get("priority_idx_arr")
+    # OPT-B: reuse precomputed initial balance/requirement arrays (built ONCE in outer runner)
+    balances0 = static_ctx.get("balances0")
+    remaining_required0 = static_ctx.get("remaining_required0")
 
-    balances, remaining_required = _build_initial_balance_and_requirement_arrays(
-        initial_allocation_df=initial_allocation_df,
-        bucket_to_idx=bucket_to_idx,
-        n_buckets=n_buckets,
-    )
+    if balances0 is not None and remaining_required0 is not None:
+        # Copy is required — both arrays are mutated during simulation.
+        balances = balances0.copy()
+        remaining_required = remaining_required0.copy()
+    else:
+        balances, remaining_required = _build_initial_balance_and_requirement_arrays(
+            initial_allocation_df=initial_allocation_df,
+            bucket_to_idx=bucket_to_idx,
+            n_buckets=n_buckets,
+        )
 
     sampled_returns, _asset_detail_rows_all = _sample_returns_for_path(
         path_id=path_id,
@@ -2360,114 +2519,164 @@ def _simulate_one_mc_path_l2(
 
     any_shortfall = False
     first_shortfall_year = None
-    min_total_balance = float("inf")
+    # Track minimum BUCKET 0 balance (the bill-paying bucket) instead of
+    # min total portfolio. By design only bucket 0 is hit by expense_out;
+    # bucket 1 going to zero is normal (rebalance drains it to refill
+    # bucket 0). A real shortfall = bucket 0 ended a year < 0 (couldn't pay).
+    min_bucket0_balance = float("inf")
     detail_rows = [] if keep_path_detail else None
 
     priority_idx_names = list(funding_rule.contribution_priority)
 
+    # OPT-A2: pre-allocate transfer buffers ONCE outside the year loop.
+    # Each year resets via .fill(0.0); inplace helpers accumulate via +=.
+    # Saves 2 * n_years * n_buckets-sized np.zeros() allocs per path.
+    transfer_in = np.zeros(n_buckets, dtype=float)
+    transfer_out = np.zeros(n_buckets, dtype=float)
+    # OPT-D: reusable zero buffer for no-inflow shortcut (never mutated).
+    _zero_contribution_buf = np.zeros(n_buckets, dtype=float)
+
     for yi in range(n_years):
         year = int(years[yi])
 
-        beginning_balances = balances.copy()
+        # OPT-3: alias instead of copy — `balances` is reassigned to a NEW array on the next line,
+        # so the original buffer (now aliased as beginning_balances) is no longer mutated.
+        beginning_balances = balances
+
+        # OPT-A2: reset transfer buffers in-place (no new allocation)
+        transfer_in.fill(0.0)
+        transfer_out.fill(0.0)
 
         # A) inflow allocation
         total_inflow = float(contribution_arr[yi] + topup_arr[yi])
-        contribution_in = _allocate_yearly_inflow_to_buckets_array(
-            inflow_amount=total_inflow,
-            remaining_required_arr=remaining_required,
-            contribution_priority_names=priority_idx_names,
-            bucket_to_idx=bucket_to_idx,
-            n_buckets=n_buckets,
-        )
-        remaining_required = np.maximum(0.0, remaining_required - contribution_in)
-
+        # OPT-D: skip allocator entirely when no inflow this year (common in retirement years)
+        if total_inflow <= 0:
+            contribution_in = _zero_contribution_buf
+        elif priority_idx_arr is not None:
+            # OPT-4: int-index fast path (logic identical, no dict lookups)
+            contribution_in = _allocate_yearly_inflow_to_buckets_array_fast(
+                inflow_amount=total_inflow,
+                remaining_required_arr=remaining_required,
+                priority_idx_arr=priority_idx_arr,
+                n_buckets=n_buckets,
+            )
+        else:
+            contribution_in = _allocate_yearly_inflow_to_buckets_array(
+                inflow_amount=total_inflow,
+                remaining_required_arr=remaining_required,
+                contribution_priority_names=priority_idx_names,
+                bucket_to_idx=bucket_to_idx,
+                n_buckets=n_buckets,
+            )
         # B) add inflow, apply return, apply expense
-        transfer_in = np.zeros(n_buckets, dtype=float)
-        transfer_out = np.zeros(n_buckets, dtype=float)
-
+        #    - expense_out hits SHORT bucket (index 0) only — no pro-rata. The
+        #      short bucket is the bill-paying bucket; the long bucket compounds
+        #      untouched until rebalance refills the short bucket.
         balances = balances + contribution_in
-        base_for_return = balances.copy()
+        base_for_return = balances
         investment_return = np.where(base_for_return > 0, base_for_return * sampled_returns[yi], 0.0)
-        investment_return = np.round(investment_return, 2)
+        np.round(investment_return, 2, out=investment_return)
 
-        # Fix 2: ลด remaining requirement ด้วย investment return จริงที่เกิดขึ้น (numpy version)
-        remaining_required = np.maximum(0.0, remaining_required - np.maximum(0.0, investment_return))
+        year_total_expense = float(total_expense_by_year_arr[yi])
+        expense_out_arr = np.zeros(n_buckets, dtype=float)
+        if n_buckets > 0:
+            expense_out_arr[0] = year_total_expense
 
-        balances = base_for_return + investment_return - expense_arr[yi]
-        balances = np.round(balances, 2)
+        balances = base_for_return + investment_return - expense_out_arr
+        np.round(balances, 2, out=balances)
 
-        # C) shortfall cover — iterate in REVERSE bucket order so Liquidity
-        # (index 0, the "bill-paying" bucket) is processed last and acts as the
-        # residual absorber for any deficit that donors can't cover from higher
-        # buckets. Stability/Growth shortfalls redirect their residual to
-        # Liquidity, keeping all unresolved shortfall concentrated in a single
-        # bucket (Evensky bill-paying bucket).
-        for bi in range(n_buckets - 1, -1, -1):
-            if balances[bi] < 0:
-                rt = None if bi == 0 else 0
-                balances, xfer_in_step, xfer_out_step = _resolve_shortfall_array(
-                    year=year,
-                    target_idx=bi,
-                    balances_arr=balances,
-                    ordered_bucket_names=ordered_bucket_names,
-                    funding_rule=funding_rule,
-                    residual_target_idx=rt,
-                )
-                transfer_in += xfer_in_step
-                transfer_out += xfer_out_step
+        # C) (removed) — no shortfall waterfall. Negative balances in the short
+        # bucket are addressed by step D's fill-to-PV (which transfers from the
+        # long bucket); residual gaps are recorded as shortfall.
 
-                if balances[bi] < 0:
-                    any_shortfall = True
-                    if first_shortfall_year is None:
-                        first_shortfall_year = year
+        # D) Rebalance — fill SHORT bucket up to the next-year rolling expense
+        # requirement, drawing from the LONG bucket (index 1). Requirement is
+        # recomputed each year from the rolling expense window (nominal sum,
+        # i.e. PV at 0% discount). When the long bucket cannot fully cover the
+        # gap, the unfilled remainder is recorded as shortfall.
+        if n_buckets >= 2:
+            # Rolling next-year expense window for the SHORT bucket:
+            # years [yi+1, yi+1+w_short). For the final year (no future expense)
+            # the requirement is 0.
+            w_short = int(bucket_window_sizes[0])
+            if w_short < 0:
+                w_short = 1  # safety: treat unbounded short bucket as window=1 year
+            req_start = yi + 1
+            req_end = min(req_start + w_short, n_years)
+            if req_start < req_end:
+                short_requirement = float(total_expense_by_year_arr[req_start:req_end].sum())
+            else:
+                short_requirement = 0.0
 
-        # D) Annual rebalance toward rolling-window target weights (R10).
-        # Note: end-of-horizon rollover removed (R11) — buckets never expire because
-        # rolling-window target weights are recomputed each year from the current
-        # year forward.
-        target_weights = _compute_rebalance_targets(
-            yi=yi,
-            n_years=n_years,
-            total_expense_by_year_arr=total_expense_by_year_arr,
-            bucket_window_sizes=bucket_window_sizes,
-            n_buckets=n_buckets,
-        )
-        balances, rebal_in, rebal_out = _apply_annual_rebalance(
-            balances=balances, target_weights=target_weights, n_buckets=n_buckets,
-        )
-        transfer_in += rebal_in
-        transfer_out += rebal_out
+            short_gap = short_requirement - float(balances[0])
+            if short_gap > 0:
+                long_available = max(0.0, float(balances[1]))
+                xfer = min(short_gap, long_available)
+                if xfer > 0:
+                    balances[0] += xfer
+                    balances[1] -= xfer
+                    transfer_in[0] += xfer
+                    transfer_out[1] += xfer
+                # NOTE: previous "rebalance ไม่ครบเป้า" flag removed —
+                # under-filling bucket 0 is just "less buffer for next year",
+                # not a real shortfall. Real shortfall = bucket 0 actually
+                # ended a year < 0 (couldn't pay this year's expense). See
+                # the bucket-0 check below.
 
-        balances = np.round(balances, 2)
+        np.round(balances, 2, out=balances)
 
-        total_balance_this_year = float(np.round(balances.sum(), 2))
-        min_total_balance = min(min_total_balance, total_balance_this_year)
+        # Track bucket 0's minimum balance (the bill-paying bucket).
+        min_bucket0_balance = min(min_bucket0_balance, float(balances[0]))
 
+        # Detail row still records per-bucket negative state (informational —
+        # lets the user see if bucket 1 ever ran out in path_detail), but
+        # ONLY bucket 0 going negative drives any_shortfall / path_success.
         is_shortfall_arr = balances < 0
-        if is_shortfall_arr.any():
+        if is_shortfall_arr[0]:
             any_shortfall = True
             if first_shortfall_year is None:
                 first_shortfall_year = year
 
         if keep_path_detail:
-            for bi, bucket_name in enumerate(ordered_bucket_names):
-                detail_rows.append({
-                    "path_id": int(path_id),
-                    "year": int(year),
-                    "bucket_name": str(bucket_name),
-                    "sampled_return": round(float(sampled_returns[yi, bi]), 8),
-                    "beginning_balance": round(float(beginning_balances[bi]), 2),
-                    "contribution_in": round(float(contribution_in[bi]), 2),
-                    "transfer_in": round(float(transfer_in[bi]), 2),
-                    "investment_return": round(float(investment_return[bi]), 2),
-                    "expense_out": round(float(expense_arr[yi, bi]), 2),
-                    "transfer_out": round(float(transfer_out[bi]), 2),
-                    "ending_balance": round(float(balances[bi]), 2),
-                    "is_shortfall": bool(is_shortfall_arr[bi]),
-                })
+            # Detail column order (Path × Year × Bucket) — matches the identity
+            #   EB = BB + contribution_in + transfer_in + investment_return
+            #          − expense_out − transfer_out
+            # path_id / year / bucket_name come from the post-loop column build
+            # (np.repeat/np.tile); supplemental columns sampled_return and
+            # is_shortfall are written last and consumed by downstream summaries.
+            if detail_buffers is not None:
+                _row_start = int(path_offset) + yi * n_buckets
+                _row_end = _row_start + n_buckets
+                detail_buffers["beginning_balance"][_row_start:_row_end] = np.round(beginning_balances, 2)
+                detail_buffers["contribution_in"][_row_start:_row_end] = np.round(contribution_in, 2)
+                detail_buffers["investment_return"][_row_start:_row_end] = np.round(investment_return, 2)
+                detail_buffers["expense_out"][_row_start:_row_end] = np.round(expense_out_arr, 2)
+                detail_buffers["transfer_in"][_row_start:_row_end] = np.round(transfer_in, 2)
+                detail_buffers["transfer_out"][_row_start:_row_end] = np.round(transfer_out, 2)
+                detail_buffers["ending_balance"][_row_start:_row_end] = np.round(balances, 2)
+                detail_buffers["sampled_return"][_row_start:_row_end] = np.round(sampled_returns[yi], 8)
+                detail_buffers["is_shortfall"][_row_start:_row_end] = is_shortfall_arr
+            else:
+                for bi, bucket_name in enumerate(ordered_bucket_names):
+                    detail_rows.append({
+                        "path_id": int(path_id),
+                        "year": int(year),
+                        "bucket_name": str(bucket_name),
+                        "beginning_balance": round(float(beginning_balances[bi]), 2),
+                        "contribution_in": round(float(contribution_in[bi]), 2),
+                        "investment_return": round(float(investment_return[bi]), 2),
+                        "expense_out": round(float(expense_out_arr[bi]), 2),
+                        "transfer_in": round(float(transfer_in[bi]), 2),
+                        "transfer_out": round(float(transfer_out[bi]), 2),
+                        "ending_balance": round(float(balances[bi]), 2),
+                        "sampled_return": round(float(sampled_returns[yi, bi]), 8),
+                        "is_shortfall": bool(is_shortfall_arr[bi]),
+                    })
 
     final_total_balance = round(float(balances.sum()), 2)
-    total_shortfall_amount = round(abs(min(min_total_balance, 0.0)), 2)
+    # Shortfall amount = worst negative bucket-0 balance across years.
+    # Reflects "deepest underpayment" — how short the bill-paying bucket got.
+    total_shortfall_amount = round(abs(min(min_bucket0_balance, 0.0)), 2)
     path_success = (not any_shortfall) and (final_total_balance >= float(success_threshold))
 
     path_summary = {
@@ -2606,6 +2815,27 @@ def run_bucket_engine_monte_carlo_level2(
         simulation_end_year=int(simulation_end_year),
     )
 
+    # OPT-4: precompute integer priority-index array ONCE for the fast inflow allocator.
+    # Order preserved verbatim from funding_rule.contribution_priority so the
+    # arithmetic sequence inside _allocate_yearly_inflow_to_buckets_array_fast
+    # is bit-identical to the original string-keyed version.
+    _bucket_to_idx = static_ctx["bucket_to_idx"]
+    static_ctx["priority_idx_arr"] = np.array(
+        [int(_bucket_to_idx[b]) for b in funding_rule.contribution_priority],
+        dtype=np.int64,
+    )
+
+    # OPT-B: precompute initial balance + remaining requirement arrays ONCE.
+    # _build_initial_balance_and_requirement_arrays iterates initial_allocation_df.iterrows()
+    # which is expensive; hoisting it out of the per-path loop saves O(n_paths) DataFrame work.
+    _balances0, _remaining_required0 = _build_initial_balance_and_requirement_arrays(
+        initial_allocation_df=initial_allocation_df,
+        bucket_to_idx=_bucket_to_idx,
+        n_buckets=int(static_ctx["n_buckets"]),
+    )
+    static_ctx["balances0"] = _balances0
+    static_ctx["remaining_required0"] = _remaining_required0
+
     # ----------------------------------------------------
     # Main MC loop
     # A7: aggregate row dicts across ALL paths in a single flat list, then
@@ -2616,10 +2846,15 @@ def run_bucket_engine_monte_carlo_level2(
     all_path_detail_rows: List[dict] = []
     all_asset_detail_rows: List[dict] = []
 
+    # Column order matches the EB identity:
+    #   EB = BB + contribution_in + transfer_in + investment_return − expense_out − transfer_out
+    # sampled_return and is_shortfall are supplemental columns consumed by
+    # downstream summary builders.
     _detail_cols = [
-        "path_id", "year", "bucket_name", "sampled_return", "beginning_balance",
-        "contribution_in", "transfer_in", "investment_return", "expense_out",
-        "transfer_out", "ending_balance", "is_shortfall",
+        "path_id", "year", "bucket_name",
+        "beginning_balance", "contribution_in", "investment_return", "expense_out",
+        "transfer_in", "transfer_out", "ending_balance",
+        "sampled_return", "is_shortfall",
     ]
     _asset_cols = [
         "path_id", "year", "bucket_name", "asset_name",
@@ -2627,6 +2862,25 @@ def run_bucket_engine_monte_carlo_level2(
     ]
 
     total_paths = int(mc_config.n_paths)
+
+    # OPT-C: pre-allocate columnar buffers for path detail (avoid per-row dict appends).
+    # Layout: row = path_id * (n_years * n_buckets) + yi * n_buckets + bi
+    _n_rows_per_path = int(static_ctx["n_years"]) * int(static_ctx["n_buckets"])
+    if mc_config.keep_path_detail:
+        _n_total_rows = total_paths * _n_rows_per_path
+        detail_buffers: Optional[Dict[str, np.ndarray]] = {
+            "sampled_return":    np.empty(_n_total_rows, dtype=float),
+            "beginning_balance": np.empty(_n_total_rows, dtype=float),
+            "contribution_in":   np.empty(_n_total_rows, dtype=float),
+            "transfer_in":       np.empty(_n_total_rows, dtype=float),
+            "investment_return": np.empty(_n_total_rows, dtype=float),
+            "expense_out":       np.empty(_n_total_rows, dtype=float),
+            "transfer_out":      np.empty(_n_total_rows, dtype=float),
+            "ending_balance":    np.empty(_n_total_rows, dtype=float),
+            "is_shortfall":      np.empty(_n_total_rows, dtype=bool),
+        }
+    else:
+        detail_buffers = None
 
     for path_id in range(total_paths):
         detail_rows_one, asset_rows_one, path_summary = _simulate_one_mc_path_l2(
@@ -2640,11 +2894,15 @@ def run_bucket_engine_monte_carlo_level2(
             success_threshold=float(mc_config.success_threshold),
             keep_path_detail=bool(mc_config.keep_path_detail),
             keep_asset_detail=bool(mc_config.keep_asset_detail),
+            detail_buffers=detail_buffers,
+            path_offset=path_id * _n_rows_per_path,
         )
 
         all_path_summaries.append(path_summary)
 
-        if mc_config.keep_path_detail and detail_rows_one:
+        # When detail_buffers is used, _simulate_one_mc_path_l2 writes directly into
+        # the buffers and returns an empty detail_rows_one list — skip the extend.
+        if mc_config.keep_path_detail and detail_buffers is None and detail_rows_one:
             all_path_detail_rows.extend(detail_rows_one)
 
         if mc_config.keep_asset_detail and asset_rows_one:
@@ -2662,7 +2920,37 @@ def run_bucket_engine_monte_carlo_level2(
     if not mc_path_summary_df.empty:
         mc_path_summary_df = mc_path_summary_df.sort_values("path_id").reset_index(drop=True)
 
-    if mc_config.keep_path_detail and all_path_detail_rows:
+    if mc_config.keep_path_detail and detail_buffers is not None:
+        # OPT-C: build path_id / year / bucket_name columns via np.repeat/np.tile.
+        # Order must match the buffer write layout in _simulate_one_mc_path_l2:
+        #   row = path_id * (n_years * n_buckets) + yi * n_buckets + bi
+        _years_arr = static_ctx["years_arr"]
+        _bucket_names_arr = np.array(static_ctx["ordered_bucket_names"], dtype=object)
+        _n_years = int(static_ctx["n_years"])
+        _n_buckets = int(static_ctx["n_buckets"])
+
+        path_id_col = np.repeat(np.arange(total_paths, dtype=np.int64), _n_rows_per_path)
+        year_col = np.tile(np.repeat(_years_arr, _n_buckets), total_paths)
+        bucket_col = np.tile(np.tile(_bucket_names_arr, _n_years), total_paths)
+
+        mc_path_detail_df = pd.DataFrame({
+            "path_id":           path_id_col,
+            "year":              year_col,
+            "bucket_name":       bucket_col,
+            "beginning_balance": detail_buffers["beginning_balance"],
+            "contribution_in":   detail_buffers["contribution_in"],
+            "investment_return": detail_buffers["investment_return"],
+            "expense_out":       detail_buffers["expense_out"],
+            "transfer_in":       detail_buffers["transfer_in"],
+            "transfer_out":      detail_buffers["transfer_out"],
+            "ending_balance":    detail_buffers["ending_balance"],
+            "sampled_return":    detail_buffers["sampled_return"],
+            "is_shortfall":      detail_buffers["is_shortfall"],
+        })
+        mc_path_detail_df = mc_path_detail_df.sort_values(
+            ["path_id", "year", "bucket_name"]
+        ).reset_index(drop=True)
+    elif mc_config.keep_path_detail and all_path_detail_rows:
         mc_path_detail_df = pd.DataFrame(all_path_detail_rows, columns=_detail_cols)
         mc_path_detail_df = mc_path_detail_df.sort_values(
             ["path_id", "year", "bucket_name"]
