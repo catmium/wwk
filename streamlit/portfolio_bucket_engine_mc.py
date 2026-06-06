@@ -7,7 +7,6 @@ import numpy as np
 from scipy.stats import norm, t as student_t
 
 from portfolio_bucket_engine import (
-    BucketConfig,
     BucketFundingRule,
     validate_bucket_configs,
     validate_bucket_funding_rule,
@@ -16,9 +15,6 @@ from portfolio_bucket_engine import (
     assign_expense_to_buckets,
     calculate_bucket_requirements,
     allocate_initial_savings_to_buckets,
-    initialize_bucket_balances,
-    allocate_yearly_inflow_to_buckets,
-    resolve_shortfall_with_cross_bucket_transfer,
     _bucket_names_in_order,
 )
 
@@ -138,61 +134,112 @@ class MonteCarloConfig:
 
 
 @dataclass
-class BucketMCPathYearState:
-    path_id: int
-    year: int
-    bucket_name: str
-    sampled_return: float
-    beginning_balance: float
-    contribution_in: float
-    transfer_in: float
-    investment_return: float
-    expense_out: float
-    transfer_out: float
-    ending_balance: float
-    is_shortfall: bool
+class TermAssetConfig:
+    """
+    สินทรัพย์แบบมี term (structured fund / structured note / term fund / term deposit)
+
+    คุณสมบัติ
+    --------
+    - ซื้อปีเดียว (buy_year) ด้วยเงินก้อนขั้นต่ำ (min_initial_investment)
+    - ล็อกจนครบกำหนด (term_years ปี) — ห้ามขาย/เติมระหว่างทาง
+    - ครบกำหนดได้เงินก้อน (principal + gains) — rollover ได้สูงสุด max_rollovers ครั้ง
+      (rollover = ล็อกเงินก้อนที่ครบกำหนดทั้งหมดต่ออีก 1 term)
+    - เงินซื้อหักจาก LONG bucket; ถ้าเงินไม่พอ → ข้ามการซื้อทั้งก้อน
+
+    Distribution (ผูกกับ payoff type)
+    --------------------------------
+    - "fixed"     : principal-protected / contractual (term deposit, capital-guaranteed note)
+                    std_dev=0 → ผลตอบแทนคงที่ทุกปี = mean_return
+    - "student_t" : market-linked / NAV-floating (term fund, participation structured note)
+                    fat-tailed df=5 + clip ด้วย min_return/max_return
+
+    Parameters
+    ----------
+    name : str
+    buy_year : int
+        ปีที่ซื้อ (absolute year)
+    min_initial_investment : float
+        เงินก้อนขั้นต่ำที่ต้องมีใน LONG bucket จึงจะซื้อได้
+    term_years : int
+        ความยาว term (>= 1)
+    max_rollovers : int
+        จำนวนครั้ง rollover สูงสุด (0 = ครบกำหนดแล้วจบ)
+    mean_return : float
+        expected annual return
+    std_dev : float
+        annual volatility (ต้อง 0 เมื่อ distribution="fixed")
+    min_return / max_return : Optional[float]
+        clip bounds ต่อปี
+    distribution : str
+        "fixed" | "student_t"
+    """
+    name: str
+    buy_year: int
+    min_initial_investment: float
+    term_years: int
+    max_rollovers: int = 0
+    mean_return: float = 0.0
+    std_dev: float = 0.0
+    min_return: Optional[float] = None
+    max_return: Optional[float] = None
+    distribution: str = "fixed"
+
+
+def validate_term_assets(term_assets: Optional[List[TermAssetConfig]]) -> None:
+    """
+    validate รายการ term asset:
+    - name ไม่ว่าง/ไม่ซ้ำ
+    - buy_year, term_years, min_initial_investment, max_rollovers ใช้ได้
+    - distribution รองรับ ("fixed" | "student_t")
+    - fixed ต้อง std_dev == 0
+    - min_return <= max_return
+    """
+    if not term_assets:
+        return
+
+    allowed_dist = {"fixed", "student_t"}
+    seen = set()
+
+    for t in term_assets:
+        if not t.name:
+            raise ValueError("TermAssetConfig.name must not be empty")
+        if t.name in seen:
+            raise ValueError(f"Duplicate term asset name: {t.name}")
+        seen.add(t.name)
+
+        if int(t.term_years) < 1:
+            raise ValueError(f"term_years must be >= 1 for term asset={t.name}")
+        if float(t.min_initial_investment) <= 0:
+            raise ValueError(
+                f"min_initial_investment must be > 0 for term asset={t.name}"
+            )
+        if int(t.max_rollovers) < 0:
+            raise ValueError(f"max_rollovers must be >= 0 for term asset={t.name}")
+
+        if t.distribution not in allowed_dist:
+            raise ValueError(
+                f"Unsupported distribution '{t.distribution}' for term asset={t.name}. "
+                f"Allowed values are {sorted(allowed_dist)}"
+            )
+        if float(t.std_dev) < 0:
+            raise ValueError(f"std_dev must be >= 0 for term asset={t.name}")
+        if t.distribution == "fixed" and float(t.std_dev) != 0:
+            raise ValueError(
+                f"For distribution='fixed', std_dev should be 0 for term asset={t.name}"
+            )
+        if (
+            t.min_return is not None
+            and t.max_return is not None
+            and float(t.min_return) > float(t.max_return)
+        ):
+            raise ValueError(
+                f"min_return must be <= max_return for term asset={t.name}"
+            )
 
 
 # NOTE: path summary มาจาก runtime DataFrame ที่สร้าง column ต่อ bucket
 # แบบ dynamic ใน build_*_summary_df (ดู mc_path_summary_df ใน BucketMCResult).
 # ไม่ใช้ dataclass เพื่อให้รองรับชื่อ bucket แบบกำหนดเอง (B6).
-
-
-@dataclass
-class BucketMCYearSummary:
-    year: int
-    bucket_name: str
-    p10_ending_balance: float
-    p50_ending_balance: float
-    p90_ending_balance: float
-    shortfall_probability: float
-    mean_investment_return: float
-
-
-@dataclass
-class BucketMCBucketSummary:
-    bucket_name: str
-    success_probability: float
-    shortfall_probability: float
-    expected_terminal_balance: float
-    p10_terminal_balance: float
-    p50_terminal_balance: float
-    p90_terminal_balance: float
-    expected_shortfall: float
-
-
-@dataclass
-class BucketMCEngineSummary:
-    n_paths: int
-    success_probability: float
-    shortfall_probability: float
-    expected_final_total_balance: float
-    p10_final_total_balance: float
-    p50_final_total_balance: float
-    p90_final_total_balance: float
-    expected_shortfall: float
-    worst_shortfall: float
-    first_shortfall_year_mode: Optional[int]
 
 
 @dataclass
@@ -208,10 +255,17 @@ class BucketMCResult:
     # columns: path_id, year, bucket_name, asset_name, weight_pct, weight_normalized,
     #          sampled_return, weighted_contribution
     mc_path_asset_detail_df: pd.DataFrame = None
+    # Term-asset purchase-skip summary — one row per term asset.
+    # columns: term_name, buy_year, n_paths, n_skipped, skip_probability
+    # Surfaces the % of simulated paths where a term asset could NOT be
+    # purchased because the LONG bucket lacked the minimum investment.
+    mc_term_skip_summary_df: pd.DataFrame = None
 
     def __post_init__(self):
         if self.mc_path_asset_detail_df is None:
             self.mc_path_asset_detail_df = pd.DataFrame()
+        if self.mc_term_skip_summary_df is None:
+            self.mc_term_skip_summary_df = pd.DataFrame()
 
 
 # ============================================================
@@ -379,18 +433,6 @@ def validate_monte_carlo_config(mc_config: MonteCarloConfig) -> None:
 # RETURN SAMPLING
 # ============================================================
 
-def _clip_return(
-    value: float,
-    min_return: Optional[float],
-    max_return: Optional[float],
-) -> float:
-    if min_return is not None:
-        value = max(value, float(min_return))
-    if max_return is not None:
-        value = min(value, float(max_return))
-    return float(value)
-
-
 def _resolve_intra_bucket_correlation(
     model: BucketReturnModel,
     n_assets: int,
@@ -419,141 +461,6 @@ def _resolve_intra_bucket_correlation(
     return mat
 
 
-def _sample_single_return(
-    mean_return: float,
-    std_dev: float,
-    min_return: Optional[float],
-    max_return: Optional[float],
-    distribution: str,
-    rng,
-    label: str = "",
-) -> float:
-    """
-    internal helper: sample 1 ครั้งจาก student-t (df=5, hard-coded) แล้ว clip.
-
-    เฉพาะ "student_t" (default) และ "fixed" เท่านั้นที่รองรับ. "normal" จะถูก
-    treat เป็น student_t df=5 — engine hard-codes Student-t สำหรับทุก sample.
-    """
-    if distribution == "fixed":
-        sampled = float(mean_return)
-    else:
-        # student_t df=5 (hard-coded) — applies to "student_t" และ legacy "normal"
-        sampled = float(mean_return) + float(std_dev) * float(rng.standard_t(5))
-
-    return float(_clip_return(sampled, min_return, max_return))
-
-
-def sample_one_bucket_return(
-    bucket_return_model: BucketReturnModel,
-    rng,
-    capture_asset_detail: bool = False,
-) -> "float | tuple[float, list]":
-    """
-    sample annual return สำหรับ bucket เดียว 1 ครั้ง
-
-    ถ้า bucket_return_model.assets มีข้อมูล → simulate แต่ละ asset
-    แล้วรวม weighted average (normalize weight อัตโนมัติ)
-
-    ถ้า assets ว่าง → fallback ไป bucket-level mean/std (พฤติกรรมเดิม)
-
-    Parameters
-    ----------
-    bucket_return_model : BucketReturnModel
-    rng : numpy random generator
-    capture_asset_detail : bool
-        ถ้า True จะ return (weighted_return, asset_detail_rows_list)
-        ถ้า False (default) จะ return float เหมือนเดิม
-
-    Returns
-    -------
-    float  (when capture_asset_detail=False)
-        sampled_return
-    tuple[float, list]  (when capture_asset_detail=True)
-        (sampled_return, asset_detail_rows)
-        asset_detail_rows = list of dicts with keys:
-          asset_name, weight_pct, weight_normalized, sampled_return, weighted_contribution
-    """
-    if bucket_return_model.assets:
-        # --- Asset-level CORRELATED simulation (R1) ---
-        # ใช้ multivariate normal เพื่อให้ asset ภายใน bucket correlate กัน
-        # ตาม intra_bucket_correlation/correlation_matrix ที่ระบุ
-        # asset ที่เป็น distribution="fixed" จะใช้ mean_return ตรงๆ (ไม่ผ่าน MVN)
-        assets = bucket_return_model.assets
-        n_assets = len(assets)
-        total_weight = sum(float(a.weight) for a in assets)
-        if total_weight <= 0:
-            raise ValueError(
-                f"bucket={bucket_return_model.bucket_name}: "
-                "sum of asset weights must be > 0"
-            )
-
-        means = np.array([float(a.mean_return) for a in assets], dtype=float)
-        stds = np.array([float(a.std_dev) for a in assets], dtype=float)
-        corr = _resolve_intra_bucket_correlation(bucket_return_model, n_assets)
-        # cov[i,j] = stds[i] * stds[j] * corr[i,j]
-        cov = np.outer(stds, stds) * corr
-
-        # ใช้ tol สูงนิดเพื่อยอม clamp rho ที่ทำให้ cov เกือบ semidefinite
-        try:
-            mvn_sample = rng.multivariate_normal(mean=means, cov=cov)
-        except (ValueError, np.linalg.LinAlgError):
-            # ถ้า cov ไม่ PSD จริงๆ → fallback ไป independent normals (เหมือนเดิม)
-            mvn_sample = means + stds * rng.standard_normal(n_assets)
-
-        weighted_return = 0.0
-        asset_detail_rows = [] if capture_asset_detail else None
-
-        for i, asset in enumerate(assets):
-            w = float(asset.weight) / total_weight  # normalize
-            if asset.distribution == "fixed":
-                raw = float(asset.mean_return)
-            elif asset.distribution == "normal":
-                raw = float(mvn_sample[i])
-            else:
-                raise ValueError(
-                    f"Unsupported distribution '{asset.distribution}' for "
-                    f"{bucket_return_model.bucket_name}/{asset.asset_name}"
-                )
-            asset_r = float(_clip_return(raw, asset.min_return, asset.max_return))
-            weighted_return += w * asset_r
-
-            if capture_asset_detail:
-                asset_detail_rows.append({
-                    "asset_name":          str(asset.asset_name),
-                    "weight_pct":          round(float(asset.weight), 4),
-                    "weight_normalized":   round(w, 6),
-                    "sampled_return":      round(float(asset_r), 8),
-                    "weighted_contribution": round(float(w * asset_r), 8),
-                })
-
-        result = round(float(weighted_return), 8)
-        return (result, asset_detail_rows) if capture_asset_detail else result
-
-    else:
-        # --- Bucket-level simulation (original behaviour) ---
-        sampled = _sample_single_return(
-            mean_return=bucket_return_model.mean_return,
-            std_dev=bucket_return_model.std_dev,
-            min_return=bucket_return_model.min_return,
-            max_return=bucket_return_model.max_return,
-            distribution=bucket_return_model.distribution,
-            rng=rng,
-            label=bucket_return_model.bucket_name,
-        )
-        result = round(float(sampled), 8)
-        if capture_asset_detail:
-            # bucket-level (no per-asset breakdown) — return single pseudo-row
-            asset_detail_rows = [{
-                "asset_name":          f"[bucket-level] {bucket_return_model.bucket_name}",
-                "weight_pct":          100.0,
-                "weight_normalized":   1.0,
-                "sampled_return":      result,
-                "weighted_contribution": result,
-            }]
-            return (result, asset_detail_rows)
-        return result
-
-
 def _build_path_rng(
     mc_config: MonteCarloConfig,
     path_id: int,
@@ -567,658 +474,6 @@ def _build_path_rng(
         return np.random.default_rng()
     return np.random.default_rng(int(mc_config.random_seed) + int(path_id))
 
-
-def sample_bucket_returns_for_path(
-    path_id: int,
-    years: List[int],
-    bucket_return_models: List[BucketReturnModel],
-    mc_config: MonteCarloConfig,
-) -> "tuple[pd.DataFrame, pd.DataFrame]":
-    """
-    sample annual return ของทุก bucket สำหรับ 1 path
-
-    Returns
-    -------
-    bucket_return_df : pd.DataFrame
-        columns: path_id, year, bucket_name, sampled_return
-
-    asset_detail_df : pd.DataFrame
-        columns: path_id, year, bucket_name, asset_name,
-                 weight_pct, weight_normalized, sampled_return, weighted_contribution
-        Empty DataFrame when mc_config.keep_asset_detail=False
-    """
-    validate_monte_carlo_config(mc_config)
-    validate_bucket_return_models(bucket_return_models)
-
-    if path_id < 0:
-        raise ValueError("path_id must be >= 0")
-
-    if not years:
-        raise ValueError("years must not be empty")
-
-    years_sorted = sorted(int(y) for y in years)
-    rng = _build_path_rng(mc_config, path_id)
-    capture = bool(mc_config.keep_asset_detail)
-
-    bucket_rows = []
-    asset_rows = [] if capture else None
-
-    for year in years_sorted:
-        for model in bucket_return_models:
-            if capture:
-                ret, detail = sample_one_bucket_return(model, rng, capture_asset_detail=True)
-                for d in detail:
-                    d["path_id"]     = int(path_id)
-                    d["year"]        = int(year)
-                    d["bucket_name"] = str(model.bucket_name)
-                    asset_rows.append(d)
-            else:
-                ret = sample_one_bucket_return(model, rng, capture_asset_detail=False)
-
-            bucket_rows.append({
-                "path_id":      int(path_id),
-                "year":         int(year),
-                "bucket_name":  str(model.bucket_name),
-                "sampled_return": ret,
-            })
-
-    bucket_df = pd.DataFrame(
-        bucket_rows,
-        columns=["path_id", "year", "bucket_name", "sampled_return"],
-    )
-
-    if capture and asset_rows:
-        asset_df = pd.DataFrame(asset_rows, columns=[
-            "path_id", "year", "bucket_name", "asset_name",
-            "weight_pct", "weight_normalized", "sampled_return", "weighted_contribution",
-        ])
-    else:
-        asset_df = pd.DataFrame()
-
-    return bucket_df, asset_df
-
-
-def sample_bucket_returns_all_paths(
-    years: List[int],
-    bucket_return_models: List[BucketReturnModel],
-    mc_config: MonteCarloConfig,
-) -> "tuple[pd.DataFrame, pd.DataFrame]":
-    """
-    sample annual return ของทุก bucket สำหรับทุก paths
-
-    Returns
-    -------
-    bucket_return_df : pd.DataFrame
-        columns: path_id, year, bucket_name, sampled_return
-    asset_detail_df : pd.DataFrame
-        Empty when mc_config.keep_asset_detail=False
-    """
-    validate_monte_carlo_config(mc_config)
-    validate_bucket_return_models(bucket_return_models)
-
-    if not years:
-        raise ValueError("years must not be empty")
-
-    all_bucket_parts: List[pd.DataFrame] = []
-    all_asset_parts: List[pd.DataFrame] = []
-
-    for path_id in range(int(mc_config.n_paths)):
-        bkt_df, ast_df = sample_bucket_returns_for_path(
-            path_id=path_id,
-            years=years,
-            bucket_return_models=bucket_return_models,
-            mc_config=mc_config,
-        )
-        all_bucket_parts.append(bkt_df)
-        if mc_config.keep_asset_detail and not ast_df.empty:
-            all_asset_parts.append(ast_df)
-
-    if not all_bucket_parts:
-        return (
-            pd.DataFrame(columns=["path_id", "year", "bucket_name", "sampled_return"]),
-            pd.DataFrame(),
-        )
-
-    bucket_out = pd.concat(all_bucket_parts, axis=0, ignore_index=True)
-    bucket_out = bucket_out.sort_values(["path_id", "year", "bucket_name"]).reset_index(drop=True)
-
-    if all_asset_parts:
-        asset_out = pd.concat(all_asset_parts, axis=0, ignore_index=True)
-        asset_out = asset_out.sort_values(["path_id", "year", "bucket_name", "asset_name"]).reset_index(drop=True)
-    else:
-        asset_out = pd.DataFrame()
-
-    return bucket_out, asset_out
-
-## MC-2 start here
-
-def build_sampled_return_map_for_path(
-    sampled_return_df: pd.DataFrame,
-    path_id: int,
-) -> Dict[Tuple[int, str], float]:
-    """
-    convert sampled return df -> {(year, bucket_name): sampled_return}
-    สำหรับ path เดียว
-
-    Expected input columns:
-    - path_id
-    - year
-    - bucket_name
-    - sampled_return
-
-    Returns
-    -------
-    Dict[Tuple[int, str], float]
-        key = (year, bucket_name)
-        value = sampled_return
-    """
-    if sampled_return_df is None or sampled_return_df.empty:
-        raise ValueError("sampled_return_df must not be empty")
-
-    required_cols = ["path_id", "year", "bucket_name", "sampled_return"]
-    missing_cols = [c for c in required_cols if c not in sampled_return_df.columns]
-    if missing_cols:
-        raise ValueError(
-            f"sampled_return_df is missing required columns: {missing_cols}"
-        )
-
-    df = sampled_return_df[required_cols].copy()
-    df["path_id"] = pd.to_numeric(df["path_id"], errors="raise").astype(int)
-    df["year"] = pd.to_numeric(df["year"], errors="raise").astype(int)
-    df["bucket_name"] = df["bucket_name"].astype(str)
-    df["sampled_return"] = pd.to_numeric(df["sampled_return"], errors="raise").astype(float)
-
-    df = df.loc[df["path_id"] == int(path_id)].copy()
-    if df.empty:
-        raise ValueError(f"No sampled return rows found for path_id={path_id}")
-
-    # กันกรณี duplicate key
-    dup_mask = df.duplicated(subset=["year", "bucket_name"], keep=False)
-    if dup_mask.any():
-        dup_rows = df.loc[dup_mask, ["year", "bucket_name"]].drop_duplicates()
-        raise ValueError(
-            "Found duplicate (year, bucket_name) rows for path_id="
-            f"{path_id}: {dup_rows.to_dict(orient='records')}"
-        )
-
-    return {
-        (int(r["year"]), str(r["bucket_name"])): float(r["sampled_return"])
-        for _, r in df.iterrows()
-    }
-
-
-def summarize_one_mc_path(
-    path_year_state_df: pd.DataFrame,
-    success_threshold: float = 0.0,
-) -> Dict[str, Optional[float]]:
-    """
-    summarize ผลของ 1 path
-
-    Expected input columns:
-    - path_id
-    - year
-    - bucket_name
-    - ending_balance
-    - is_shortfall
-
-    Optional columns:
-    - beginning_balance
-    - contribution_in
-    - transfer_in
-    - investment_return
-    - expense_out
-    - transfer_out
-
-    Returns
-    -------
-    Dict[str, Optional[float]]
-        keys:
-        - path_id
-        - path_success
-        - final_total_balance
-        - total_shortfall_amount
-        - first_shortfall_year
-        - <bucket_name>_terminal_balance — สร้าง dynamic ต่อ bucket
-          (ตาม bucket_name ใน path_year_state_df, รองรับชื่อกำหนดเอง)
-    """
-    if path_year_state_df is None or path_year_state_df.empty:
-        raise ValueError("path_year_state_df must not be empty")
-
-    required_cols = ["path_id", "year", "bucket_name", "ending_balance", "is_shortfall"]
-    missing_cols = [c for c in required_cols if c not in path_year_state_df.columns]
-    if missing_cols:
-        raise ValueError(
-            f"path_year_state_df is missing required columns: {missing_cols}"
-        )
-
-    df = path_year_state_df.copy()
-    df["path_id"] = pd.to_numeric(df["path_id"], errors="raise").astype(int)
-    df["year"] = pd.to_numeric(df["year"], errors="raise").astype(int)
-    df["bucket_name"] = df["bucket_name"].astype(str)
-    df["ending_balance"] = pd.to_numeric(df["ending_balance"], errors="raise").astype(float)
-    df["is_shortfall"] = df["is_shortfall"].astype(bool)
-
-    unique_path_ids = df["path_id"].drop_duplicates().tolist()
-    if len(unique_path_ids) != 1:
-        raise ValueError(
-            "summarize_one_mc_path expects data from exactly one path_id, "
-            f"but found: {unique_path_ids}"
-        )
-
-    path_id = int(unique_path_ids[0])
-
-    # -------------------------
-    # final total balance
-    # -------------------------
-    final_year = int(df["year"].max())
-    final_total_balance = float(
-        df.loc[df["year"] == final_year, "ending_balance"].sum()
-    )
-
-    # -------------------------
-    # path success
-    # success = no shortfall in any bucket/year
-    # and final_total_balance >= success_threshold
-    # -------------------------
-    has_any_shortfall = bool(df["is_shortfall"].any())
-    path_success = (not has_any_shortfall) and (final_total_balance >= float(success_threshold))
-
-    # -------------------------
-    # first shortfall year
-    # -------------------------
-    shortfall_years = (
-        df.loc[df["is_shortfall"], "year"]
-        .drop_duplicates()
-        .sort_values()
-        .tolist()
-    )
-    first_shortfall_year = int(shortfall_years[0]) if shortfall_years else None
-
-    # -------------------------
-    # total shortfall amount
-    # ใช้ aggregate total ending balance by year
-    # แล้วดู worst negative aggregate balance
-    # -------------------------
-    total_balance_by_year = (
-        df.groupby("year", as_index=False)["ending_balance"]
-        .sum()
-        .rename(columns={"ending_balance": "total_ending_balance"})
-        .sort_values("year")
-        .reset_index(drop=True)
-    )
-    min_total_balance = float(total_balance_by_year["total_ending_balance"].min())
-    total_shortfall_amount = round(abs(min(min_total_balance, 0.0)), 2)
-
-    # -------------------------
-    # terminal balance by bucket
-    # -------------------------
-    terminal_by_bucket = (
-        df.loc[df["year"] == final_year, ["bucket_name", "ending_balance"]]
-        .copy()
-    )
-
-    terminal_map = {
-        str(r["bucket_name"]): float(r["ending_balance"])
-        for _, r in terminal_by_bucket.iterrows()
-    }
-
-    summary = {
-        "path_id": path_id,
-        "path_success": bool(path_success),
-        "final_total_balance": round(final_total_balance, 2),
-        "total_shortfall_amount": round(total_shortfall_amount, 2),
-        "first_shortfall_year": first_shortfall_year,
-    }
-    # Dynamic terminal balance columns per bucket (ไม่ hardcode bucket names)
-    for bkt_name, bal in terminal_map.items():
-        summary[f"{bkt_name}_terminal_balance"] = round(float(bal), 2)
-
-    return summary
-
-# ============================================================
-# PHASE MC-3 IMPLEMENTATION
-# ============================================================
-
-def simulate_bucket_year_one_path(
-    path_id: int,
-    year: int,
-    simulation_start_year: int,
-    balances: Dict[str, float],
-    annual_expense_map_by_bucket: Dict[Tuple[int, str], float],
-    annual_contribution_map: Dict[int, float],
-    annual_topup_map: Dict[int, float],
-    remaining_required_map: Dict[str, float],
-    sampled_return_map: Dict[Tuple[int, str], float],
-    bucket_configs: List,
-    funding_rule,
-) -> Tuple[
-    Dict[str, float],
-    List[BucketMCPathYearState],
-    Dict[str, float],
-]:
-    """
-    simulate 1 ปี สำหรับ 1 path
-
-    Assumption ของ MVP (เหมือน deterministic engine เดิมมากที่สุด):
-    - annual contribution + annual topup ถูกใส่ต้นปี
-    - investment return คิดหลังเติม inflow ของปีนั้น
-    - expense ถูกหักปลายปี
-    - shortfall cover ข้าม bucket จะเกิดหลังจ่าย expense แล้ว (เฉพาะ waterfall)
-    - sampled_return_map มี key = (year, bucket_name)
-    - ไม่มี end-of-horizon rollover แล้ว (ใช้ rolling-window targets ใน L2 engine แทน)
-
-    Returns
-    -------
-    updated_balances : Dict[str, float]
-    year_states : List[BucketMCPathYearState]
-    updated_remaining_required_map : Dict[str, float]
-    """
-    validate_bucket_configs(bucket_configs)
-    validate_bucket_funding_rule(funding_rule, bucket_configs)
-
-    if path_id < 0:
-        raise ValueError("path_id must be >= 0")
-
-    ordered_buckets = _bucket_names_in_order(bucket_configs)
-
-    # copy state
-    working_balances = {b: float(balances.get(b, 0.0)) for b in ordered_buckets}
-    updated_remaining_required_map = {
-        b: max(0.0, float(remaining_required_map.get(b, 0.0)))
-        for b in ordered_buckets
-    }
-
-    # ----------------------------------------------------
-    # Step A: allocate inflow of this year
-    # ----------------------------------------------------
-    total_inflow = float(annual_contribution_map.get(year, 0.0)) + float(annual_topup_map.get(year, 0.0))
-    allocation_map = allocate_yearly_inflow_to_buckets(
-        year=year,
-        inflow_amount=total_inflow,
-        current_balances=working_balances,
-        remaining_required_map=updated_remaining_required_map,
-        funding_rule=funding_rule,
-    )
-
-    # reduce unmet requirement using inflow allocated this year
-    for b in ordered_buckets:
-        updated_remaining_required_map[b] = round(
-            max(0.0, updated_remaining_required_map.get(b, 0.0) - allocation_map.get(b, 0.0)),
-            2,
-        )
-
-    transfer_in_map = {b: 0.0 for b in ordered_buckets}
-    transfer_out_map = {b: 0.0 for b in ordered_buckets}
-    investment_return_map = {b: 0.0 for b in ordered_buckets}
-    sampled_return_used_map = {b: 0.0 for b in ordered_buckets}
-    expense_map = {
-        b: float(annual_expense_map_by_bucket.get((year, b), 0.0))
-        for b in ordered_buckets
-    }
-    beginning_balance_map = {
-        b: float(working_balances.get(b, 0.0))
-        for b in ordered_buckets
-    }
-
-    # ----------------------------------------------------
-    # Step B: contribution in + sampled return + expense
-    # ----------------------------------------------------
-    for b in ordered_buckets:
-        # add inflow to bucket first
-        working_balances[b] = round(float(working_balances[b] + allocation_map.get(b, 0.0)), 2)
-        base_for_return = float(working_balances[b])
-
-        # sampled return for this path/year/bucket
-        sampled_return = float(sampled_return_map.get((year, b), 0.0))
-        sampled_return_used_map[b] = sampled_return
-
-        # apply investment return
-        inv_ret = round(base_for_return * sampled_return, 2) if base_for_return > 0 else 0.0
-        investment_return_map[b] = inv_ret
-
-        # Fix 2: ลด remaining requirement ด้วย investment return จริงที่เกิดขึ้น
-        # return ที่ได้ในปีนี้ช่วย "เติม" เงินใน bucket แล้ว ลด burden ของ contribution ปีถัดไป
-        if inv_ret > 0:
-            updated_remaining_required_map[b] = round(
-                max(0.0, updated_remaining_required_map[b] - inv_ret), 2
-            )
-
-        # expense at end of year
-        working_balances[b] = round(base_for_return + inv_ret - expense_map[b], 2)
-
-    # ----------------------------------------------------
-    # Step C: cover shortfall (if waterfall)
-    # Iterate in REVERSE bucket order so Liquidity (the "bill-paying" bucket)
-    # is processed last and absorbs any unresolved residual deficit from higher
-    # buckets. This keeps Stability/Growth non-negative and concentrates all
-    # shortfall on Liquidity.
-    # ----------------------------------------------------
-    liquidity_bucket = ordered_buckets[0]
-    for b in reversed(ordered_buckets):
-        if working_balances[b] < 0:
-            needed = abs(float(working_balances[b]))
-
-            updated_balances, logs, remaining_shortfall = resolve_shortfall_with_cross_bucket_transfer(
-                year=year,
-                target_bucket=b,
-                shortfall_amount=needed,
-                balances_after_expense=working_balances,
-                bucket_configs=bucket_configs,
-                funding_rule=funding_rule,
-            )
-
-            for lg in logs:
-                transfer_out_map[lg.from_bucket] += float(lg.amount)
-                transfer_in_map[lg.to_bucket] += float(lg.amount)
-
-            working_balances = updated_balances
-
-            if remaining_shortfall > 0:
-                if b != liquidity_bucket:
-                    # Redirect residual deficit onto Liquidity; clear original bucket.
-                    working_balances[b] = 0.0
-                    working_balances[liquidity_bucket] = round(
-                        float(working_balances[liquidity_bucket]) - remaining_shortfall,
-                        2,
-                    )
-                    transfer_in_map[b] += remaining_shortfall
-                    transfer_out_map[liquidity_bucket] += remaining_shortfall
-                else:
-                    working_balances[b] = round(-remaining_shortfall, 2)
-            else:
-                working_balances[b] = max(0.0, round(float(working_balances[b]), 2))
-
-    # Step D (end-of-horizon rollover) removed: rolling-window target weights
-    # in the L2 engine re-partition expense across buckets each year, so
-    # bucket horizons no longer expire. Quick-wins path simulator now mirrors
-    # that behaviour for consistency.
-
-    # ----------------------------------------------------
-    # Step E: build path-year states
-    # ----------------------------------------------------
-    year_states: List[BucketMCPathYearState] = []
-    for b in ordered_buckets:
-        year_states.append(
-            BucketMCPathYearState(
-                path_id=int(path_id),
-                year=int(year),
-                bucket_name=b,
-                sampled_return=round(float(sampled_return_used_map.get(b, 0.0)), 8),
-                beginning_balance=round(float(beginning_balance_map[b]), 2),
-                contribution_in=round(float(allocation_map.get(b, 0.0)), 2),
-                transfer_in=round(float(transfer_in_map.get(b, 0.0)), 2),
-                investment_return=round(float(investment_return_map.get(b, 0.0)), 2),
-                expense_out=round(float(expense_map.get(b, 0.0)), 2),
-                transfer_out=round(float(transfer_out_map.get(b, 0.0)), 2),
-                ending_balance=round(float(working_balances.get(b, 0.0)), 2),
-                is_shortfall=bool(float(working_balances.get(b, 0.0)) < 0),
-            )
-        )
-
-    updated_balances = {
-        b: round(float(working_balances.get(b, 0.0)), 2)
-        for b in ordered_buckets
-    }
-
-    return updated_balances, year_states, updated_remaining_required_map
-
-
-def simulate_bucket_engine_one_path(
-    path_id: int,
-    annual_expense_df: pd.DataFrame,
-    bucket_assignment_df: pd.DataFrame,
-    bucket_requirement_df: pd.DataFrame,
-    initial_allocation_df: pd.DataFrame,
-    annual_contribution_map: Dict[int, float],
-    annual_topup_map: Dict[int, float],
-    sampled_return_df: pd.DataFrame,
-    simulation_start_year: int,
-    bucket_configs: List,
-    funding_rule,
-    keep_path_detail: bool = False,
-) -> Tuple[pd.DataFrame, Dict[str, float]]:
-    """
-    simulate 1 path จนจบ projection horizon
-
-    Returns
-    -------
-    path_year_state_df : pd.DataFrame
-        columns:
-        - path_id
-        - year
-        - bucket_name
-        - sampled_return
-        - beginning_balance
-        - contribution_in
-        - transfer_in
-        - investment_return
-        - expense_out
-        - transfer_out
-        - ending_balance
-        - is_shortfall
-
-    path_summary_dict : Dict[str, float]
-        keys:
-        - path_id
-        - path_success
-        - final_total_balance
-        - total_shortfall_amount
-        - first_shortfall_year
-        - <bucket_name>_terminal_balance — dynamic ต่อ bucket
-          (รองรับชื่อ bucket แบบกำหนดเอง)
-    """
-    validate_bucket_configs(bucket_configs)
-    validate_bucket_funding_rule(funding_rule, bucket_configs)
-
-    if path_id < 0:
-        raise ValueError("path_id must be >= 0")
-
-    if initial_allocation_df is None or initial_allocation_df.empty:
-        raise ValueError("initial_allocation_df must not be empty")
-
-    if bucket_requirement_df is None or bucket_requirement_df.empty:
-        raise ValueError("bucket_requirement_df must not be empty")
-
-    # ----------------------------------------------------
-    # build return map for this path
-    # ----------------------------------------------------
-    sampled_return_map = build_sampled_return_map_for_path(
-        sampled_return_df=sampled_return_df,
-        path_id=path_id,
-    )
-
-    # ----------------------------------------------------
-    # initial balances
-    # ----------------------------------------------------
-    balances = initialize_bucket_balances(initial_allocation_df)
-
-    # use unmet_required_amount as remaining requirement to be filled by future inflows
-    if "bucket_name" not in initial_allocation_df.columns or "unmet_required_amount" not in initial_allocation_df.columns:
-        raise ValueError(
-            "initial_allocation_df must contain ['bucket_name', 'unmet_required_amount']"
-        )
-
-    remaining_required_map = {
-        str(r["bucket_name"]): float(r["unmet_required_amount"])
-        for _, r in initial_allocation_df[["bucket_name", "unmet_required_amount"]].iterrows()
-    }
-
-    # ----------------------------------------------------
-    # determine projection years
-    # ----------------------------------------------------
-    years = set()
-
-    if annual_expense_df is not None and not annual_expense_df.empty and "year" in annual_expense_df.columns:
-        years.update(
-            pd.to_numeric(annual_expense_df["year"], errors="raise").astype(int).tolist()
-        )
-
-    years.update(int(y) for y in annual_contribution_map.keys())
-    years.update(int(y) for y in annual_topup_map.keys())
-
-    # include sampled return years for this path
-    sampled_years = {y for (y, _b) in sampled_return_map.keys()}
-    years.update(int(y) for y in sampled_years)
-
-    if not years:
-        years = {int(simulation_start_year)}
-
-    start_year = int(simulation_start_year)
-    end_year = max(int(y) for y in years)
-
-    # ----------------------------------------------------
-    # build expense map by bucket
-    # ----------------------------------------------------
-    annual_expense_map_by_bucket: Dict[Tuple[int, str], float] = {}
-
-    if bucket_assignment_df is not None and not bucket_assignment_df.empty:
-        required_cols = ["year", "bucket_name", "total_expense"]
-        missing_cols = [c for c in required_cols if c not in bucket_assignment_df.columns]
-        if missing_cols:
-            raise ValueError(
-                f"bucket_assignment_df is missing required columns: {missing_cols}"
-            )
-
-        grouped = (
-            bucket_assignment_df.groupby(["year", "bucket_name"], as_index=False)["total_expense"]
-            .sum()
-        )
-
-        for _, r in grouped.iterrows():
-            annual_expense_map_by_bucket[(int(r["year"]), str(r["bucket_name"]))] = float(r["total_expense"])
-
-    # ----------------------------------------------------
-    # simulate year by year
-    # ----------------------------------------------------
-    all_states: List[BucketMCPathYearState] = []
-
-    for year in range(start_year, end_year + 1):
-        balances, states, remaining_required_map = simulate_bucket_year_one_path(
-            path_id=path_id,
-            year=year,
-            simulation_start_year=simulation_start_year,
-            balances=balances,
-            annual_expense_map_by_bucket=annual_expense_map_by_bucket,
-            annual_contribution_map=annual_contribution_map,
-            annual_topup_map=annual_topup_map,
-            remaining_required_map=remaining_required_map,
-            sampled_return_map=sampled_return_map,
-            bucket_configs=bucket_configs,
-            funding_rule=funding_rule,
-        )
-        all_states.extend(states)
-
-    path_year_state_df = pd.DataFrame([vars(x) for x in all_states])
-
-    # keep_path_detail=False:
-    # caller may choose not to persist this df,
-    # butเรายังคืน df นี้ไปเพื่อให้ summarize_one_mc_path ใช้ได้ทันที
-    path_summary_dict = summarize_one_mc_path(
-        path_year_state_df=path_year_state_df,
-        success_threshold=0.0,
-    )
-
-    return path_year_state_df, path_summary_dict
 
 # ============================================================
 # PHASE MC-4 IMPLEMENTATION
@@ -1508,297 +763,6 @@ def build_mc_engine_summary(
 
     return out
 
-from typing import Dict, List, Optional, Tuple
-import pandas as pd
-
-# ============================================================
-# Helper: precompute expense map once
-# ============================================================
-def _build_annual_expense_map_by_bucket_once(
-    bucket_assignment_df: pd.DataFrame,
-) -> Dict[Tuple[int, str], float]:
-    expense_map = {}
-
-    if bucket_assignment_df is None or bucket_assignment_df.empty:
-        return expense_map
-
-    grouped = (
-        bucket_assignment_df
-        .groupby(["year", "bucket_name"], as_index=False)["total_expense"]
-        .sum()
-    )
-
-    for _, r in grouped.iterrows():
-        expense_map[(int(r["year"]), str(r["bucket_name"]))] = float(r["total_expense"])
-
-    return expense_map
-
-
-# ============================================================
-# Helper: simulate one path (fast version)
-# ============================================================
-def _simulate_one_mc_path_fast(
-    path_id: int,
-    simulation_start_year: int,
-    simulation_end_year: int,
-    initial_allocation_df: pd.DataFrame,
-    annual_expense_map_by_bucket: Dict[Tuple[int, str], float],
-    annual_contribution_map: Dict[int, float],
-    annual_topup_map: Dict[int, float],
-    sampled_return_df_one_path: pd.DataFrame,
-    bucket_configs: List,
-    funding_rule,
-    keep_path_detail: bool,
-    success_threshold: float,
-):
-    # initial balances
-    balances = initialize_bucket_balances(initial_allocation_df)
-
-    remaining_required_map = {
-        r["bucket_name"]: float(r["unmet_required_amount"])
-        for _, r in initial_allocation_df.iterrows()
-    }
-
-    sampled_return_map = build_sampled_return_map_for_path(
-        sampled_return_df=sampled_return_df_one_path,
-        path_id=path_id,
-    )
-
-    any_shortfall = False
-    first_shortfall_year = None
-    min_total_balance = float("inf")
-    detail_rows = [] if keep_path_detail else None
-
-    for year in range(simulation_start_year, simulation_end_year + 1):
-        balances, states, remaining_required_map = simulate_bucket_year_one_path(
-            path_id=path_id,
-            year=year,
-            simulation_start_year=simulation_start_year,
-            balances=balances,
-            annual_expense_map_by_bucket=annual_expense_map_by_bucket,
-            annual_contribution_map=annual_contribution_map,
-            annual_topup_map=annual_topup_map,
-            remaining_required_map=remaining_required_map,
-            sampled_return_map=sampled_return_map,
-            bucket_configs=bucket_configs,
-            funding_rule=funding_rule,
-        )
-
-        total_balance = 0.0
-        for s in states:
-            total_balance += float(s.ending_balance)
-            if s.is_shortfall:
-                any_shortfall = True
-                if first_shortfall_year is None:
-                    first_shortfall_year = int(s.year)
-
-            if keep_path_detail:
-                detail_rows.append(vars(s))
-
-        min_total_balance = min(min_total_balance, total_balance)
-
-    final_total_balance = round(sum(balances.values()), 2)
-    total_shortfall_amount = round(abs(min(min_total_balance, 0.0)), 2)
-
-    path_summary = {
-        "path_id": path_id,
-        "path_success": (not any_shortfall) and final_total_balance >= success_threshold,
-        "final_total_balance": final_total_balance,
-        "total_shortfall_amount": total_shortfall_amount,
-        "first_shortfall_year": first_shortfall_year,
-    }
-    for _bname, _bal in balances.items():
-        path_summary[f"{_bname}_terminal_balance"] = round(float(_bal), 2)
-
-    if keep_path_detail:
-        path_detail_df = pd.DataFrame(detail_rows)
-    else:
-        path_detail_df = pd.DataFrame()
-
-    return path_detail_df, path_summary
-
-
-# ============================================================
-# ✅ OPTIMIZED MONTE CARLO (QUICK WINS)
-# ============================================================
-def run_bucket_engine_monte_carlo(
-    expense_df: pd.DataFrame,
-    initial_savings: float,
-    annual_contribution_map: Dict[int, float],
-    annual_topup_map: Dict[int, float],
-    bucket_configs: Optional[List] = None,
-    funding_rule=None,
-    bucket_return_models: Optional[List[BucketReturnModel]] = None,
-    mc_config: Optional[MonteCarloConfig] = None,
-    simulation_start_year: Optional[int] = None,
-    initial_allocation_override_df: Optional[pd.DataFrame] = None,
-    progress_callback=None,
-    progress_update_every: int = 1,
-) -> BucketMCResult:
-    """
-    Optimized Monte Carlo engine (quick wins)
-    - Logic identical to original version
-    - Much lower DataFrame + memory overhead
-
-    Parameters
-    ----------
-    initial_allocation_override_df : Optional[pd.DataFrame]
-        ถ้าระบุ จะใช้ allocation นี้แทน auto-computed allocation
-        ต้องมี columns: bucket_name, recommended_initial_amount,
-        recommended_initial_weight, unmet_required_amount
-        (ใช้สำหรับ manual allocation mode)
-    """
-
-    bucket_configs = bucket_configs or default_bucket_configs()
-    funding_rule = funding_rule or BucketFundingRule()
-    bucket_return_models = bucket_return_models or default_bucket_return_models()
-    mc_config = mc_config or MonteCarloConfig()
-
-    validate_bucket_configs(bucket_configs)
-    validate_bucket_funding_rule(funding_rule, bucket_configs)
-    validate_bucket_return_models(
-        bucket_return_models,
-        expected_bucket_names=[b.bucket_name for b in bucket_configs],
-    )
-    validate_monte_carlo_config(mc_config)
-
-    # ----------------------------------------------------
-    # planning layer (ONCE)
-    # ----------------------------------------------------
-    annual_expense_df = prepare_annual_expense(expense_df)
-
-    candidate_years = set()
-    if not annual_expense_df.empty:
-        candidate_years |= set(annual_expense_df["year"].astype(int))
-    candidate_years |= set(annual_contribution_map.keys())
-    candidate_years |= set(annual_topup_map.keys())
-
-    simulation_start_year = simulation_start_year or min(candidate_years)
-    simulation_end_year = max(candidate_years)
-    projection_years = list(range(simulation_start_year, simulation_end_year + 1))
-
-    bucket_assignment_df = assign_expense_to_buckets(
-        annual_expense_df=annual_expense_df,
-        simulation_start_year=simulation_start_year,
-        bucket_configs=bucket_configs,
-    )
-
-    # Fix 1: ใช้ max(0, min_return) เป็น conservative discount rate
-    # เหตุผล: ถ้า min_return ติดลบ (เช่น -40%) การ discount ด้วย rate ติดลบ
-    # จะทำให้ required_present_value โป่งเกินจริง (เช่น 142M สำหรับ expense 3M)
-    # floor ที่ 0% หมายความว่า "ต้องมีเงิน >= nominal future expense ทั้งหมด"
-    # ซึ่งเป็น conservative กว่าการใช้ mean_return แต่สมเหตุสมผลสำหรับ planning
-    conservative_discount_rate_map = {
-        m.bucket_name: max(0.0, float(m.min_return)) if m.min_return is not None else 0.0
-        for m in bucket_return_models
-    }
-
-    bucket_requirement_df = calculate_bucket_requirements(
-        bucket_assignment_df=bucket_assignment_df,
-        simulation_start_year=simulation_start_year,
-        bucket_configs=bucket_configs,
-        discount_rate_override_map=conservative_discount_rate_map,
-    )
-
-    # Fix 3: ใช้ manual allocation ถ้า user override ไว้
-    if initial_allocation_override_df is not None:
-        initial_allocation_df = initial_allocation_override_df
-    else:
-        initial_allocation_df = allocate_initial_savings_to_buckets(
-            initial_savings=initial_savings,
-            bucket_requirement_df=bucket_requirement_df,
-            funding_rule=funding_rule,
-        )
-
-    annual_expense_map_by_bucket = _build_annual_expense_map_by_bucket_once(
-        bucket_assignment_df
-    )
-
-    # ----------------------------------------------------
-    # Monte Carlo loop
-    # ----------------------------------------------------
-    all_path_summaries = []
-    all_path_details  = [] if mc_config.keep_path_detail  else None
-    all_asset_details = [] if mc_config.keep_asset_detail else None
-
-    total_paths = int(mc_config.n_paths)
-
-    for path_id in range(total_paths):
-        sampled_return_df_one_path, asset_detail_df_one_path = sample_bucket_returns_for_path(
-            path_id=path_id,
-            years=projection_years,
-            bucket_return_models=bucket_return_models,
-            mc_config=mc_config,
-        )
-
-        path_detail_df, path_summary = _simulate_one_mc_path_fast(
-            path_id=path_id,
-            simulation_start_year=simulation_start_year,
-            simulation_end_year=simulation_end_year,
-            initial_allocation_df=initial_allocation_df,
-            annual_expense_map_by_bucket=annual_expense_map_by_bucket,
-            annual_contribution_map=annual_contribution_map,
-            annual_topup_map=annual_topup_map,
-            sampled_return_df_one_path=sampled_return_df_one_path,
-            bucket_configs=bucket_configs,
-            funding_rule=funding_rule,
-            keep_path_detail=mc_config.keep_path_detail,
-            success_threshold=mc_config.success_threshold,
-        )
-
-        all_path_summaries.append(path_summary)
-
-        if mc_config.keep_path_detail:
-            all_path_details.append(path_detail_df)
-
-        if mc_config.keep_asset_detail and not asset_detail_df_one_path.empty:
-            all_asset_details.append(asset_detail_df_one_path)
-
-        if progress_callback and (
-            (path_id + 1) % progress_update_every == 0
-            or path_id + 1 == total_paths
-        ):
-            progress_callback(path_id + 1, total_paths)
-
-    # ----------------------------------------------------
-    # build outputs
-    # ----------------------------------------------------
-    mc_path_summary_df = pd.DataFrame(all_path_summaries)
-
-    if mc_config.keep_path_detail and all_path_details:
-        mc_path_detail_df = pd.concat(all_path_details, ignore_index=True)
-    else:
-        mc_path_detail_df = pd.DataFrame()
-
-    if mc_config.keep_asset_detail and all_asset_details:
-        mc_path_asset_detail_df = pd.concat(all_asset_details, ignore_index=True)
-        mc_path_asset_detail_df = mc_path_asset_detail_df.sort_values(
-            ["path_id", "year", "bucket_name", "asset_name"]
-        ).reset_index(drop=True)
-    else:
-        mc_path_asset_detail_df = pd.DataFrame()
-
-    mc_engine_summary_df = build_mc_engine_summary(mc_path_summary_df)
-
-    if mc_config.keep_path_detail:
-        mc_year_summary_df = build_mc_year_summary(mc_path_detail_df)
-        mc_bucket_summary_df = build_mc_bucket_summary(
-            mc_path_detail_df, mc_path_summary_df
-        )
-    else:
-        mc_year_summary_df = pd.DataFrame()
-        mc_bucket_summary_df = pd.DataFrame()
-
-    return BucketMCResult(
-        bucket_requirement_df=bucket_requirement_df,
-        initial_allocation_df=initial_allocation_df,
-        mc_year_summary_df=mc_year_summary_df,
-        mc_bucket_summary_df=mc_bucket_summary_df,
-        mc_engine_summary_df=mc_engine_summary_df,
-        mc_path_summary_df=mc_path_summary_df,
-        mc_path_detail_df=mc_path_detail_df,
-        mc_path_asset_detail_df=mc_path_asset_detail_df,
-    )
 
 # optimized version 2
 # LEVEL-2 OPTIMIZATION HELPERS
@@ -2110,6 +1074,152 @@ def _sample_returns_for_path(
     return out, asset_detail_rows
 
 
+# Offset added to the per-path seed when drawing TERM-asset returns so their
+# RNG stream is independent of the bucket-return stream (which uses
+# random_seed + path_id). Large prime keeps the two streams from colliding.
+_TERM_RNG_OFFSET = 7_000_003
+
+
+def _sample_term_returns_for_path(
+    path_id: int,
+    n_years: int,
+    term_assets: List[TermAssetConfig],
+    mc_config: MonteCarloConfig,
+) -> np.ndarray:
+    """
+    Sample per-year returns for each term asset on one path.
+
+    Returns
+    -------
+    np.ndarray, shape (n_years, n_term)
+        term_returns[yi, j] = sampled annual return for term asset j in year yi.
+
+    Behaviour
+    ---------
+    - "fixed": constant mean_return every year (std_dev=0), no clipping needed.
+    - "student_t" (and any non-fixed): Student-t df=5 marginal via the same
+      copula stack used for bucket-level returns —
+        z ~ N(0,1); u = Phi(z); x = t.ppf(u, df=5); r = mean + std*x; clip.
+    - Years are iid (each row independent). RNG is seeded from
+      random_seed + path_id + _TERM_RNG_OFFSET so term draws do not perturb
+      the bucket-return stream for the same seed.
+    """
+    n_term = len(term_assets)
+    out = np.zeros((n_years, n_term), dtype=float)
+    if n_term == 0 or n_years == 0:
+        return out
+
+    if mc_config.random_seed is None:
+        rng = np.random.default_rng()
+    else:
+        rng = np.random.default_rng(
+            int(mc_config.random_seed) + int(path_id) + _TERM_RNG_OFFSET
+        )
+
+    DF_T = 5
+
+    for j, t in enumerate(term_assets):
+        if t.distribution == "fixed":
+            out[:, j] = float(t.mean_return)
+            continue
+
+        z = rng.standard_normal(size=n_years)
+        u = np.clip(norm.cdf(z), 1e-12, 1.0 - 1e-12)
+        samples = float(t.mean_return) + float(t.std_dev) * student_t.ppf(u, df=DF_T)
+
+        lo = t.min_return
+        hi = t.max_return
+        if lo is not None or hi is not None:
+            samples = np.clip(
+                samples,
+                -np.inf if lo is None else float(lo),
+                np.inf if hi is None else float(hi),
+            )
+        out[:, j] = samples
+
+    return out
+
+
+def _term_quality_sort_key(t: TermAssetConfig, input_index: int) -> Tuple[float, float, int, int]:
+    """
+    Ordering used to break ties when funds are insufficient to buy every term
+    asset competing at the SAME lock moment (same buy_year).
+
+    Priority (best first):
+        1. higher mean_return   → sort by -mean_return ascending
+        2. lower std_dev        → ascending
+        3. shorter term_years   → ascending
+        4. original input order → ascending input_index
+    """
+    return (-float(t.mean_return), float(t.std_dev), int(t.term_years), int(input_index))
+
+
+def _build_term_context(
+    term_assets: Optional[List[TermAssetConfig]],
+    simulation_start_year: int,
+) -> Dict[str, object]:
+    """
+    Precompute path-invariant term scheduling once.
+
+    Lock timing (locked design):
+    - buy_year > start  : principal is drawn from the LONG bucket at END of the
+      year BEFORE buy_year (lock_year = buy_year - 1), AFTER that year's
+      rebalance — so it never starves the short bucket. BB(buy_year) = principal,
+      first accrual in buy_year.
+    - buy_year == start : there is no prior plan year, so the principal is locked
+      at the very START of year 0 (before inflow/rebalance). BB(buy_year) =
+      principal immediately, first accrual still in buy_year.
+
+    Maturity (deferred-payout design):
+    - lock → accrue every year for term_years*(max_rollovers+1) years
+      (last accrual at buy_year + term_years*(max_rollovers+1) - 1) → then a
+      dedicated PAYOUT year at payout_year = buy_year + term_years*(max_rollovers+1)
+      with NO accrual: BB = matured value, return = 0, EB = 0 (money withdrawn).
+      The matured cash becomes usable in payout_year. Rollovers simply extend the
+      accrual span; there is no intermediate re-lock event.
+
+    Selection when funds are insufficient: assets sharing a lock moment are
+    attempted in `_term_quality_sort_key` order; all-or-nothing per asset;
+    skip-and-continue to the next affordable asset; a skip is permanent.
+    """
+    term_list = list(term_assets) if term_assets else []
+    n_term = len(term_list)
+    start_year = int(simulation_start_year)
+
+    buy_year = [int(t.buy_year) for t in term_list]
+    min_inv = [float(t.min_initial_investment) for t in term_list]
+    term_len = [int(t.term_years) for t in term_list]
+    max_rollovers = [int(t.max_rollovers) for t in term_list]
+    payout_year = [buy_year[j] + term_len[j] * (max_rollovers[j] + 1) for j in range(n_term)]
+
+    # start-of-year-0 locks (buy_year == start), quality-ordered
+    start0_order = sorted(
+        [j for j in range(n_term) if buy_year[j] <= start_year],
+        key=lambda j: _term_quality_sort_key(term_list[j], j),
+    )
+
+    # EOY locks keyed by absolute lock_year (= buy_year - 1), quality-ordered
+    eoy_locks_by_year: Dict[int, List[int]] = {}
+    for j in range(n_term):
+        if buy_year[j] > start_year:
+            lock_year = buy_year[j] - 1
+            eoy_locks_by_year.setdefault(lock_year, []).append(j)
+    for lock_year, idxs in eoy_locks_by_year.items():
+        idxs.sort(key=lambda j: _term_quality_sort_key(term_list[j], j))
+
+    return {
+        "term_list": term_list,
+        "n_term": n_term,
+        "buy_year": buy_year,
+        "min_inv": min_inv,
+        "term_len": term_len,
+        "max_rollovers": max_rollovers,
+        "payout_year": payout_year,
+        "start0_order": start0_order,
+        "eoy_locks_by_year": eoy_locks_by_year,
+    }
+
+
 def _allocate_yearly_inflow_to_buckets_array(
     inflow_amount: float,
     remaining_required_arr: np.ndarray,
@@ -2183,173 +1293,6 @@ def _allocate_yearly_inflow_to_buckets_array_fast(
     return alloc
 
 
-def _resolve_shortfall_array(
-    year: int,
-    target_idx: int,
-    balances_arr: np.ndarray,
-    ordered_bucket_names: List[str],
-    funding_rule,
-    residual_target_idx: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Same logic as resolve_shortfall_with_cross_bucket_transfer(...), but array-based.
-
-    Parameters
-    ----------
-    residual_target_idx : Optional[int]
-        If provided and donors cannot fully cover the shortfall, the remaining
-        deficit is moved from `target_idx` onto `residual_target_idx`. This keeps
-        the original target bucket non-negative and concentrates all unresolved
-        shortfall on the designated residual bucket (typically Liquidity — the
-        "bill-paying" bucket in Harold Evensky's methodology).
-
-        If None (or equal to target_idx), the residual stays on the target bucket
-        as a negative balance (original behaviour).
-
-    Returns
-    -------
-    balances_arr : updated balances
-    transfer_in_arr : per bucket transfer in for this step
-    transfer_out_arr : per bucket transfer out for this step
-    """
-    n_buckets = len(ordered_bucket_names)
-    transfer_in_arr = np.zeros(n_buckets, dtype=float)
-    transfer_out_arr = np.zeros(n_buckets, dtype=float)
-
-    if balances_arr[target_idx] >= 0:
-        return balances_arr, transfer_in_arr, transfer_out_arr
-
-    if (not funding_rule.allow_cross_bucket_transfer) or (funding_rule.transfer_direction != "waterfall"):
-        return balances_arr, transfer_in_arr, transfer_out_arr
-
-    shortfall = abs(float(balances_arr[target_idx]))
-
-    # donor buckets are longer horizon buckets to the right
-    for donor_idx in range(target_idx + 1, n_buckets):
-        if shortfall <= 0:
-            break
-
-        available = max(0.0, float(balances_arr[donor_idx]))
-        if available <= 0:
-            continue
-
-        xfer = min(available, shortfall)
-        balances_arr[donor_idx] -= xfer
-        balances_arr[target_idx] += xfer
-        transfer_out_arr[donor_idx] += xfer
-        transfer_in_arr[target_idx] += xfer
-        shortfall -= xfer
-
-    # Residual redirect: if donors are exhausted and a residual_target_idx is
-    # provided, push the remaining deficit onto that bucket (typically Liquidity).
-    # This zeroes the original target bucket and lets the residual bucket carry
-    # the negative balance as the single "shock absorber".
-    if (
-        shortfall > 0
-        and residual_target_idx is not None
-        and int(residual_target_idx) != int(target_idx)
-    ):
-        ri = int(residual_target_idx)
-        balances_arr[target_idx] += shortfall
-        balances_arr[ri] -= shortfall
-        transfer_in_arr[target_idx] += shortfall
-        transfer_out_arr[ri] += shortfall
-
-    return balances_arr, transfer_in_arr, transfer_out_arr
-
-
-def _resolve_shortfall_array_inplace(
-    target_idx: int,
-    balances_arr: np.ndarray,
-    n_buckets: int,
-    funding_rule,
-    xfer_in_buf: np.ndarray,
-    xfer_out_buf: np.ndarray,
-    residual_target_idx: Optional[int] = None,
-) -> None:
-    """
-    OPT-5/A: in-place variant of _resolve_shortfall_array.
-
-    Same logic + same arithmetic as _resolve_shortfall_array, but writes
-    transfer amounts directly into caller-supplied buffers (xfer_in_buf,
-    xfer_out_buf) via += accumulation, and mutates balances_arr in place.
-    Avoids two np.zeros(n_buckets) allocations per call in the MC hot loop.
-    """
-    if balances_arr[target_idx] >= 0:
-        return
-
-    if (not funding_rule.allow_cross_bucket_transfer) or (funding_rule.transfer_direction != "waterfall"):
-        return
-
-    shortfall = abs(float(balances_arr[target_idx]))
-
-    for donor_idx in range(target_idx + 1, n_buckets):
-        if shortfall <= 0:
-            break
-
-        available = max(0.0, float(balances_arr[donor_idx]))
-        if available <= 0:
-            continue
-
-        xfer = min(available, shortfall)
-        balances_arr[donor_idx] -= xfer
-        balances_arr[target_idx] += xfer
-        xfer_out_buf[donor_idx] += xfer
-        xfer_in_buf[target_idx] += xfer
-        shortfall -= xfer
-
-    if (
-        shortfall > 0
-        and residual_target_idx is not None
-        and int(residual_target_idx) != int(target_idx)
-    ):
-        ri = int(residual_target_idx)
-        balances_arr[target_idx] += shortfall
-        balances_arr[ri] -= shortfall
-        xfer_in_buf[target_idx] += shortfall
-        xfer_out_buf[ri] += shortfall
-
-
-def _apply_annual_rebalance_inplace(
-    balances: np.ndarray,
-    target_weights: np.ndarray,
-    n_buckets: int,
-    rebal_in_buf: np.ndarray,
-    rebal_out_buf: np.ndarray,
-) -> None:
-    """
-    OPT-5/A: in-place variant of _apply_annual_rebalance.
-
-    Same logic + same arithmetic + same branching as _apply_annual_rebalance,
-    but writes rebalance amounts into caller-supplied buffers (rebal_in_buf,
-    rebal_out_buf) via += accumulation, and mutates balances in place.
-    """
-    total = float(balances.sum())
-    if total <= 0:
-        return
-
-    target_amounts = target_weights * total
-    diff = balances - target_amounts  # positive = over-weight
-
-    total_over = max(float(diff[diff > 0].sum()), 0.0)
-    total_under = max(float((-diff[diff < 0]).sum()), 0.0)
-    transferable = min(total_over, total_under)
-
-    if transferable <= 0.01:
-        return
-
-    for bi in range(n_buckets):
-        if diff[bi] > 0:
-            give = float(diff[bi]) * (transferable / total_over) if total_over > 0 else 0.0
-            give = min(give, float(balances[bi]))
-            balances[bi] -= give
-            rebal_out_buf[bi] += give
-        elif diff[bi] < 0:
-            recv = float(-diff[bi]) * (transferable / total_under) if total_under > 0 else 0.0
-            balances[bi] += recv
-            rebal_in_buf[bi] += recv
-
-
 def _compute_rebalance_targets(
     yi: int,
     n_years: int,
@@ -2408,54 +1351,6 @@ def _compute_rebalance_targets(
     return window_expense / total
 
 
-def _apply_annual_rebalance(
-    balances: np.ndarray,
-    target_weights: np.ndarray,
-    n_buckets: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Rebalance buckets toward target weights (R4 — Step E).
-
-    Transfers from over-weight buckets to under-weight buckets.
-    Only moves excess; never creates negative balances.
-
-    Returns
-    -------
-    balances : updated balances
-    rebal_in : per-bucket amount received
-    rebal_out : per-bucket amount sent
-    """
-    total = float(balances.sum())
-    rebal_in = np.zeros(n_buckets, dtype=float)
-    rebal_out = np.zeros(n_buckets, dtype=float)
-
-    if total <= 0:
-        return balances, rebal_in, rebal_out
-
-    target_amounts = target_weights * total
-    diff = balances - target_amounts  # positive = over-weight
-
-    total_over = max(float(diff[diff > 0].sum()), 0.0)
-    total_under = max(float((-diff[diff < 0]).sum()), 0.0)
-    transferable = min(total_over, total_under)
-
-    if transferable <= 0.01:
-        return balances, rebal_in, rebal_out
-
-    for bi in range(n_buckets):
-        if diff[bi] > 0:
-            give = float(diff[bi]) * (transferable / total_over) if total_over > 0 else 0.0
-            give = min(give, float(balances[bi]))
-            balances[bi] -= give
-            rebal_out[bi] += give
-        elif diff[bi] < 0:
-            recv = float(-diff[bi]) * (transferable / total_under) if total_under > 0 else 0.0
-            balances[bi] += recv
-            rebal_in[bi] += recv
-
-    return balances, rebal_in, rebal_out
-
-
 def _simulate_one_mc_path_l2(
     path_id: int,
     static_ctx: Dict[str, object],
@@ -2467,6 +1362,7 @@ def _simulate_one_mc_path_l2(
     success_threshold: float,
     keep_path_detail: bool,
     keep_asset_detail: bool = False,
+    term_assets: Optional[List[TermAssetConfig]] = None,
     detail_buffers: Optional[Dict[str, np.ndarray]] = None,
     path_offset: int = 0,
 ):
@@ -2536,6 +1432,71 @@ def _simulate_one_mc_path_l2(
     # OPT-D: reusable zero buffer for no-inflow shortcut (never mutated).
     _zero_contribution_buf = np.zeros(n_buckets, dtype=float)
 
+    # ----------------------------------------------------
+    # TERM-ASSET SIDECAR LEDGER (kept OUT of the balances array, projected as a
+    # separate "term" track in the detail df via bucket_kind="term")
+    # ----------------------------------------------------
+    # Term money is drawn from / paid back to the LONG bucket only. While locked
+    # it compounds in its own sidecar ledger (term_value) — it cannot pay
+    # expenses, so it never touches the bucket-0 shortfall logic — yet it is
+    # counted toward terminal wealth as illiquid money. The LONG-bucket cash
+    # flows (lock draw, maturity payout) fold into the existing
+    # transfer_out/transfer_in buffers so the liquid EB identity is preserved.
+    # The term track is additionally emitted as its own detail rows where the
+    # SAME identity holds:
+    #   EB_term = BB_term + transfer_in(lock) + investment_return(accrual)
+    #             − transfer_out(payout)
+    #
+    # Timing (locked design):
+    #   - Lock at EOY of (buy_year-1), AFTER that year's rebalance, so the draw
+    #     never starves the short bucket. First plan-year buys lock at the very
+    #     START of year 0 instead (no prior year exists).
+    #   - Accrue exactly term_years times (buy_year .. buy_year+term_years-1).
+    #   - Maturity payout at EOY of payout_year = buy_year+term_years-1, BEFORE
+    #     that year's rebalance (Choice B) so matured cash can refill the short
+    #     bucket the same year.
+    #   - Insufficient funds among assets sharing a lock moment: attempt in
+    #     quality order (return desc → std asc → term asc → input order);
+    #     all-or-nothing; skip-and-continue; a skip is permanent.
+    term_ctx = static_ctx.get("term_ctx")
+    if term_ctx is None:
+        _first_year = int(years[0]) if n_years > 0 else 0
+        term_ctx = _build_term_context(term_assets, _first_year)
+    _term_list = term_ctx["term_list"]
+    n_term = int(term_ctx["n_term"])
+    long_idx = n_buckets - 1  # payout target == funding source == long bucket
+
+    if n_term > 0:
+        # Seed FIRST-YEAR (start0) holdings already pre-funded from the initial
+        # allocation: those start active with BB = principal and no year-0
+        # transfer_in. Everything else starts empty.
+        _seed_vals = static_ctx.get("term_initial_values") or [0.0] * n_term
+        _seed_skipped = static_ctx.get("term_prefund_skipped") or [False] * n_term
+        term_value = [float(_seed_vals[j]) for j in range(n_term)]   # compounded value
+        term_active = [term_value[j] > 0.0 for j in range(n_term)]   # currently locked?
+        term_bought = [term_value[j] > 0.0 for j in range(n_term)]   # ever purchased?
+        term_skipped = [bool(_seed_skipped[j]) for j in range(n_term)]  # purchase skipped?
+        term_rollovers_left = list(term_ctx["max_rollovers"])
+        term_min_inv = term_ctx["min_inv"]
+        term_len = term_ctx["term_len"]
+        # absolute payout year per asset; re-pinned at lock time (rollover bumps it)
+        term_maturity_year = [int(term_ctx["payout_year"][j]) for j in range(n_term)]
+        start0_order = term_ctx["start0_order"]
+        eoy_locks_by_year = term_ctx["eoy_locks_by_year"]
+        term_returns = _sample_term_returns_for_path(
+            path_id=path_id,
+            n_years=n_years,
+            term_assets=_term_list,
+            mc_config=mc_config,
+        )
+        # Per-year capture buffers (reused each year) → written to term detail rows.
+        tb_bb = np.zeros(n_term, dtype=float)        # term BB (start-of-year value)
+        tb_in = np.zeros(n_term, dtype=float)        # principal locked in this year
+        tb_out = np.zeros(n_term, dtype=float)       # matured lump paid out this year
+        tb_ret = np.zeros(n_term, dtype=float)       # accrual this year (currency)
+        tb_eb = np.zeros(n_term, dtype=float)        # term EB (end-of-year value)
+        tb_sampled = np.zeros(n_term, dtype=float)   # sampled term return this year
+
     for yi in range(n_years):
         year = int(years[yi])
 
@@ -2546,6 +1507,45 @@ def _simulate_one_mc_path_l2(
         # OPT-A2: reset transfer buffers in-place (no new allocation)
         transfer_in.fill(0.0)
         transfer_out.fill(0.0)
+
+        # Per-year term capture buffers reset (consumed by term detail rows).
+        # tb_bb is captured BEFORE any term event so the term-track EB identity
+        #   EB_term = BB_term + transfer_in(lock) + investment_return(accrual)
+        #             − transfer_out(payout)
+        # holds per row. tb_sampled records this year's sampled term return.
+        if n_term > 0:
+            tb_bb.fill(0.0)
+            tb_in.fill(0.0)
+            tb_out.fill(0.0)
+            tb_ret.fill(0.0)
+            tb_eb.fill(0.0)
+            tb_sampled.fill(0.0)
+            for j in range(n_term):
+                tb_bb[j] = float(term_value[j])
+                tb_sampled[j] = float(term_returns[yi, j])
+
+        # STEP 0 (year 0 only) — start-of-plan term locks (buy_year <= start).
+        # Locked at the very START of year 0, before inflow/rebalance, so the
+        # principal never earns the liquid return this year (it earns the TERM
+        # return via the accrual step below, since term_active flips True here).
+        # The in-place draw mutates `balances`, which currently aliases
+        # beginning_balances — copy first so BB shows the pre-draw state and the
+        # draw is recorded as transfer_out on the long bucket.
+        if yi == 0 and n_term > 0 and start0_order:
+            balances = balances.copy()
+            for j in start0_order:
+                if term_bought[j] or term_skipped[j]:
+                    continue
+                if float(balances[long_idx]) >= term_min_inv[j]:
+                    balances[long_idx] -= term_min_inv[j]
+                    transfer_out[long_idx] += term_min_inv[j]
+                    tb_in[j] += term_min_inv[j]
+                    term_value[j] = term_min_inv[j]
+                    term_active[j] = True
+                    term_bought[j] = True
+                    # term_maturity_year already pinned to buy + term*(rollovers+1).
+                else:
+                    term_skipped[j] = True
 
         # A) inflow allocation
         total_inflow = float(contribution_arr[yi] + topup_arr[yi])
@@ -2573,6 +1573,10 @@ def _simulate_one_mc_path_l2(
         #      short bucket is the bill-paying bucket; the long bucket compounds
         #      untouched until rebalance refills the short bucket.
         balances = balances + contribution_in
+
+        # Term events (accrual, maturity/payout, EOY locks) are applied AFTER the
+        # liquid return/expense step below so matured cash can refill the short
+        # bucket the SAME year (Choice B) and EOY locks happen after rebalance.
         base_for_return = balances
         investment_return = np.where(base_for_return > 0, base_for_return * sampled_returns[yi], 0.0)
         np.round(investment_return, 2, out=investment_return)
@@ -2584,6 +1588,35 @@ def _simulate_one_mc_path_l2(
 
         balances = base_for_return + investment_return - expense_out_arr
         np.round(balances, 2, out=balances)
+
+        # TERM ACCRUAL (EOY) — active (locked) holdings compound by their own
+        # TERM return stream. start0 holdings locked THIS year are active and
+        # accrue now (first accrual = buy_year). EOY locks happen AFTER rebalance
+        # below, so they are not yet active here and do not accrue in their lock
+        # year. The dedicated PAYOUT year (year == term_maturity_year) is skipped
+        # by the `year < term_maturity_year` guard, so the money earns no return
+        # in the year it is withdrawn.
+        if n_term > 0:
+            for j in range(n_term):
+                if term_active[j] and year < term_maturity_year[j]:
+                    _accrual = float(term_value[j]) * float(term_returns[yi, j])
+                    tb_ret[j] += _accrual
+                    term_value[j] += _accrual
+
+        # TERM MATURITY / PAYOUT (Choice B) — the payout year is a dedicated
+        # no-accrual year (= buy + term*(rollovers+1)). BB == matured value;
+        # withdraw the whole lump into the LONG bucket BEFORE rebalance so the
+        # cash can fund THIS year's expense, then deactivate. Rollovers are
+        # already baked into term_maturity_year, so there is no re-lock here.
+        if n_term > 0:
+            for j in range(n_term):
+                if term_active[j] and term_maturity_year[j] == year:
+                    payout = float(term_value[j])
+                    balances[long_idx] += payout
+                    transfer_in[long_idx] += payout
+                    tb_out[j] += payout
+                    term_active[j] = False
+                    term_value[j] = 0.0
 
         # C) (removed) — no shortfall waterfall. Negative balances in the short
         # bucket are addressed by step D's fill-to-PV (which transfers from the
@@ -2628,6 +1661,38 @@ def _simulate_one_mc_path_l2(
         # Track bucket 0's minimum balance (the bill-paying bucket).
         min_bucket0_balance = min(min_bucket0_balance, float(balances[0]))
 
+        # END-OF-YEAR TERM LOCKS — assets whose buy_year == year+1 lock their
+        # principal NOW (EOY of buy_year-1), AFTER this year's rebalance so the
+        # draw never starves the short bucket. Principal is drawn from the LONG
+        # bucket; first accrual happens NEXT year (buy_year) because term_active
+        # flips True here, after this year's accrual pass already ran. Assets
+        # sharing this lock moment are attempted in quality order; all-or-nothing
+        # per asset; skip-and-continue; a skip is permanent.
+        if n_term > 0:
+            for j in eoy_locks_by_year.get(year, []):
+                if term_bought[j] or term_skipped[j]:
+                    continue
+                if float(balances[long_idx]) >= term_min_inv[j]:
+                    balances[long_idx] -= term_min_inv[j]
+                    transfer_out[long_idx] += term_min_inv[j]
+                    tb_in[j] += term_min_inv[j]
+                    term_value[j] = term_min_inv[j]
+                    term_active[j] = True
+                    term_bought[j] = True
+                    # Maturity fixed at buy + term*(rollovers+1) (precomputed).
+                    term_maturity_year[j] = int(term_ctx["payout_year"][j])
+                else:
+                    term_skipped[j] = True
+            np.round(balances, 2, out=balances)
+
+        # Finalize term end-of-year value (EB_term) for the projected term track.
+        # Captured AFTER accrual, maturity/payout, and EOY lock so the per-row
+        # identity EB = BB + transfer_in(lock) + investment_return(accrual)
+        #               − transfer_out(payout) holds for every term row.
+        if n_term > 0:
+            for j in range(n_term):
+                tb_eb[j] = float(term_value[j])
+
         # Detail row still records per-bucket negative state (informational —
         # lets the user see if bucket 1 ever ran out in path_detail), but
         # ONLY bucket 0 going negative drives any_shortfall / path_success.
@@ -2644,24 +1709,47 @@ def _simulate_one_mc_path_l2(
             # path_id / year / bucket_name come from the post-loop column build
             # (np.repeat/np.tile); supplemental columns sampled_return and
             # is_shortfall are written last and consumed by downstream summaries.
+            # Per-year row block = n_buckets LIQUID rows + n_term TERM rows.
+            # The term rows project the sidecar ledger as a parallel track
+            # (bucket_kind="term"); the bucket_kind column itself is built once
+            # in the runner (buffer path) or carried inline (fallback path).
+            rows_per_year = n_buckets + n_term
             if detail_buffers is not None:
-                _row_start = int(path_offset) + yi * n_buckets
-                _row_end = _row_start + n_buckets
-                detail_buffers["beginning_balance"][_row_start:_row_end] = np.round(beginning_balances, 2)
-                detail_buffers["contribution_in"][_row_start:_row_end] = np.round(contribution_in, 2)
-                detail_buffers["investment_return"][_row_start:_row_end] = np.round(investment_return, 2)
-                detail_buffers["expense_out"][_row_start:_row_end] = np.round(expense_out_arr, 2)
-                detail_buffers["transfer_in"][_row_start:_row_end] = np.round(transfer_in, 2)
-                detail_buffers["transfer_out"][_row_start:_row_end] = np.round(transfer_out, 2)
-                detail_buffers["ending_balance"][_row_start:_row_end] = np.round(balances, 2)
-                detail_buffers["sampled_return"][_row_start:_row_end] = np.round(sampled_returns[yi], 8)
-                detail_buffers["is_shortfall"][_row_start:_row_end] = is_shortfall_arr
+                _row_start = int(path_offset) + yi * rows_per_year
+                _liq_end = _row_start + n_buckets
+                detail_buffers["beginning_balance"][_row_start:_liq_end] = np.round(beginning_balances, 2)
+                detail_buffers["contribution_in"][_row_start:_liq_end] = np.round(contribution_in, 2)
+                detail_buffers["investment_return"][_row_start:_liq_end] = np.round(investment_return, 2)
+                detail_buffers["expense_out"][_row_start:_liq_end] = np.round(expense_out_arr, 2)
+                detail_buffers["transfer_in"][_row_start:_liq_end] = np.round(transfer_in, 2)
+                detail_buffers["transfer_out"][_row_start:_liq_end] = np.round(transfer_out, 2)
+                detail_buffers["ending_balance"][_row_start:_liq_end] = np.round(balances, 2)
+                detail_buffers["sampled_return"][_row_start:_liq_end] = np.round(sampled_returns[yi], 8)
+                detail_buffers["is_shortfall"][_row_start:_liq_end] = is_shortfall_arr
+
+                if n_term > 0:
+                    _term_start = _liq_end
+                    _term_end = _term_start + n_term
+                    # Term-row column mapping (term semantics on shared columns):
+                    #   beginning_balance = BB_term, transfer_in = principal locked,
+                    #   investment_return = accrual (currency), transfer_out = payout,
+                    #   ending_balance = EB_term. contribution_in / expense_out = 0.
+                    detail_buffers["beginning_balance"][_term_start:_term_end] = np.round(tb_bb, 2)
+                    detail_buffers["contribution_in"][_term_start:_term_end] = 0.0
+                    detail_buffers["investment_return"][_term_start:_term_end] = np.round(tb_ret, 2)
+                    detail_buffers["expense_out"][_term_start:_term_end] = 0.0
+                    detail_buffers["transfer_in"][_term_start:_term_end] = np.round(tb_in, 2)
+                    detail_buffers["transfer_out"][_term_start:_term_end] = np.round(tb_out, 2)
+                    detail_buffers["ending_balance"][_term_start:_term_end] = np.round(tb_eb, 2)
+                    detail_buffers["sampled_return"][_term_start:_term_end] = np.round(tb_sampled, 8)
+                    detail_buffers["is_shortfall"][_term_start:_term_end] = False
             else:
                 for bi, bucket_name in enumerate(ordered_bucket_names):
                     detail_rows.append({
                         "path_id": int(path_id),
                         "year": int(year),
                         "bucket_name": str(bucket_name),
+                        "bucket_kind": "liquid",
                         "beginning_balance": round(float(beginning_balances[bi]), 2),
                         "contribution_in": round(float(contribution_in[bi]), 2),
                         "investment_return": round(float(investment_return[bi]), 2),
@@ -2672,8 +1760,28 @@ def _simulate_one_mc_path_l2(
                         "sampled_return": round(float(sampled_returns[yi, bi]), 8),
                         "is_shortfall": bool(is_shortfall_arr[bi]),
                     })
+                for j in range(n_term):
+                    detail_rows.append({
+                        "path_id": int(path_id),
+                        "year": int(year),
+                        "bucket_name": str(_term_list[j].name),
+                        "bucket_kind": "term",
+                        "beginning_balance": round(float(tb_bb[j]), 2),
+                        "contribution_in": 0.0,
+                        "investment_return": round(float(tb_ret[j]), 2),
+                        "expense_out": 0.0,
+                        "transfer_in": round(float(tb_in[j]), 2),
+                        "transfer_out": round(float(tb_out[j]), 2),
+                        "ending_balance": round(float(tb_eb[j]), 2),
+                        "sampled_return": round(float(tb_sampled[j]), 8),
+                        "is_shortfall": False,
+                    })
 
-    final_total_balance = round(float(balances.sum()), 2)
+    # Terminal wealth includes any still-locked term money. Term holdings are
+    # illiquid (cannot pay expenses) but are real wealth, so they count toward
+    # final_total_balance — which path_success measures against success_threshold.
+    terminal_locked_term_value = round(float(sum(term_value)), 2) if n_term > 0 else 0.0
+    final_total_balance = round(float(balances.sum()) + terminal_locked_term_value, 2)
     # Shortfall amount = worst negative bucket-0 balance across years.
     # Reflects "deepest underpayment" — how short the bill-paying bucket got.
     total_shortfall_amount = round(abs(min(min_bucket0_balance, 0.0)), 2)
@@ -2685,11 +1793,19 @@ def _simulate_one_mc_path_l2(
         "final_total_balance": round(final_total_balance, 2),
         "total_shortfall_amount": round(total_shortfall_amount, 2),
         "first_shortfall_year": first_shortfall_year,
+        # Illiquid locked term wealth at horizon end (0.0 when no term assets).
+        "terminal_locked_term_value": terminal_locked_term_value,
     }
     # Per-bucket terminal balance — one column per configured bucket
     # (no longer hardcoded to liquidity/stability/growth).
     for _bname, _bidx in bucket_to_idx.items():
         path_summary[f"{_bname}_terminal_balance"] = round(float(balances[_bidx]), 2)
+
+    # Per-path term-purchase outcome: True when the asset could NOT be bought
+    # on this path because the LONG bucket lacked the minimum investment at the
+    # lock moment. Aggregated downstream into mc_term_skip_summary_df.
+    for j in range(n_term):
+        path_summary[f"term_skipped__{_term_list[j].name}"] = bool(term_skipped[j])
 
     # A7: return raw row lists instead of per-path DataFrames.
     # The outer runner aggregates rows across all paths and builds ONE
@@ -2711,6 +1827,7 @@ def run_bucket_engine_monte_carlo_level2(
     mc_config: Optional[MonteCarloConfig] = None,
     simulation_start_year: Optional[int] = None,
     initial_allocation_override_df: Optional[pd.DataFrame] = None,
+    term_assets: Optional[List[TermAssetConfig]] = None,
     progress_callback=None,
     progress_update_every: int = 10,
 ) -> BucketMCResult:
@@ -2737,6 +1854,7 @@ def run_bucket_engine_monte_carlo_level2(
         expected_bucket_names=[cfg.bucket_name for cfg in bucket_configs],
     )
     validate_monte_carlo_config(mc_config)
+    validate_term_assets(term_assets)
 
     if initial_savings < 0:
         raise ValueError("initial_savings must be >= 0")
@@ -2836,6 +1954,50 @@ def run_bucket_engine_monte_carlo_level2(
     static_ctx["balances0"] = _balances0
     static_ctx["remaining_required0"] = _remaining_required0
 
+    # Precompute path-invariant term scheduling ONCE (start0 / EOY lock orders,
+    # payout years). Reused by every path instead of rebuilding it per-path.
+    static_ctx["term_ctx"] = _build_term_context(term_assets, int(simulation_start_year))
+    _term_ctx = static_ctx["term_ctx"]
+    _n_term = int(_term_ctx["n_term"])
+    _term_names = [t.name for t in _term_ctx["term_list"]]
+
+    # Pre-fund FIRST-YEAR (start0) term locks straight out of the initial
+    # allocation, so they begin year 0 with BB = principal (drawn from initial
+    # savings, NOT a year-0 transfer_in). Deterministic across paths: carve the
+    # principal from the LONG bucket's initial balance in quality order;
+    # insufficient funds → permanent skip. EOY locks (buy_year > start) are
+    # unchanged — they still draw via transfer in their lock year.
+    _term_initial_values = [0.0] * _n_term
+    _term_prefund_skipped = [False] * _n_term
+    if _n_term > 0 and _term_ctx["start0_order"]:
+        _long_idx0 = int(static_ctx["n_buckets"]) - 1
+        _bal0_arr = static_ctx["balances0"]
+        _prefund_drawn = 0.0
+        for _j in _term_ctx["start0_order"]:
+            _pp = float(_term_ctx["min_inv"][_j])
+            if float(_bal0_arr[_long_idx0]) >= _pp:
+                _bal0_arr[_long_idx0] -= _pp
+                _term_initial_values[_j] = _pp
+                _prefund_drawn += _pp
+            else:
+                _term_prefund_skipped[_j] = True
+        # Reflect the carve-out in the displayed initial allocation (long bucket).
+        if (
+            _prefund_drawn > 0
+            and initial_allocation_df is not None
+            and not initial_allocation_df.empty
+            and "bucket_name" in initial_allocation_df.columns
+            and "recommended_initial_amount" in initial_allocation_df.columns
+        ):
+            _long_name0 = str(static_ctx["ordered_bucket_names"][_long_idx0])
+            _lmask = initial_allocation_df["bucket_name"].astype(str) == _long_name0
+            initial_allocation_df.loc[_lmask, "recommended_initial_amount"] = (
+                initial_allocation_df.loc[_lmask, "recommended_initial_amount"].astype(float)
+                - _prefund_drawn
+            ).clip(lower=0.0)
+    static_ctx["term_initial_values"] = _term_initial_values
+    static_ctx["term_prefund_skipped"] = _term_prefund_skipped
+
     # ----------------------------------------------------
     # Main MC loop
     # A7: aggregate row dicts across ALL paths in a single flat list, then
@@ -2851,7 +2013,7 @@ def run_bucket_engine_monte_carlo_level2(
     # sampled_return and is_shortfall are supplemental columns consumed by
     # downstream summary builders.
     _detail_cols = [
-        "path_id", "year", "bucket_name",
+        "path_id", "year", "bucket_name", "bucket_kind",
         "beginning_balance", "contribution_in", "investment_return", "expense_out",
         "transfer_in", "transfer_out", "ending_balance",
         "sampled_return", "is_shortfall",
@@ -2865,7 +2027,7 @@ def run_bucket_engine_monte_carlo_level2(
 
     # OPT-C: pre-allocate columnar buffers for path detail (avoid per-row dict appends).
     # Layout: row = path_id * (n_years * n_buckets) + yi * n_buckets + bi
-    _n_rows_per_path = int(static_ctx["n_years"]) * int(static_ctx["n_buckets"])
+    _n_rows_per_path = int(static_ctx["n_years"]) * (int(static_ctx["n_buckets"]) + _n_term)
     if mc_config.keep_path_detail:
         _n_total_rows = total_paths * _n_rows_per_path
         detail_buffers: Optional[Dict[str, np.ndarray]] = {
@@ -2894,6 +2056,7 @@ def run_bucket_engine_monte_carlo_level2(
             success_threshold=float(mc_config.success_threshold),
             keep_path_detail=bool(mc_config.keep_path_detail),
             keep_asset_detail=bool(mc_config.keep_asset_detail),
+            term_assets=term_assets,
             detail_buffers=detail_buffers,
             path_offset=path_id * _n_rows_per_path,
         )
@@ -2925,18 +2088,30 @@ def run_bucket_engine_monte_carlo_level2(
         # Order must match the buffer write layout in _simulate_one_mc_path_l2:
         #   row = path_id * (n_years * n_buckets) + yi * n_buckets + bi
         _years_arr = static_ctx["years_arr"]
-        _bucket_names_arr = np.array(static_ctx["ordered_bucket_names"], dtype=object)
         _n_years = int(static_ctx["n_years"])
         _n_buckets = int(static_ctx["n_buckets"])
+        _rows_per_year = _n_buckets + _n_term
+
+        # Per-year name/kind blocks: n_buckets LIQUID rows then n_term TERM rows,
+        # matching the buffer write order in _simulate_one_mc_path_l2:
+        #   row = path_id*(n_years*rows_per_year) + yi*rows_per_year + within
+        _per_year_names = np.array(
+            list(static_ctx["ordered_bucket_names"]) + list(_term_names), dtype=object
+        )
+        _per_year_kinds = np.array(
+            ["liquid"] * _n_buckets + ["term"] * _n_term, dtype=object
+        )
 
         path_id_col = np.repeat(np.arange(total_paths, dtype=np.int64), _n_rows_per_path)
-        year_col = np.tile(np.repeat(_years_arr, _n_buckets), total_paths)
-        bucket_col = np.tile(np.tile(_bucket_names_arr, _n_years), total_paths)
+        year_col = np.tile(np.repeat(_years_arr, _rows_per_year), total_paths)
+        bucket_col = np.tile(np.tile(_per_year_names, _n_years), total_paths)
+        kind_col = np.tile(np.tile(_per_year_kinds, _n_years), total_paths)
 
         mc_path_detail_df = pd.DataFrame({
             "path_id":           path_id_col,
             "year":              year_col,
             "bucket_name":       bucket_col,
+            "bucket_kind":       kind_col,
             "beginning_balance": detail_buffers["beginning_balance"],
             "contribution_in":   detail_buffers["contribution_in"],
             "investment_return": detail_buffers["investment_return"],
@@ -2948,20 +2123,26 @@ def run_bucket_engine_monte_carlo_level2(
             "is_shortfall":      detail_buffers["is_shortfall"],
         })
         mc_path_detail_df = mc_path_detail_df.sort_values(
-            ["path_id", "year", "bucket_name"]
+            ["path_id", "year", "bucket_kind", "bucket_name"]
         ).reset_index(drop=True)
     elif mc_config.keep_path_detail and all_path_detail_rows:
         mc_path_detail_df = pd.DataFrame(all_path_detail_rows, columns=_detail_cols)
         mc_path_detail_df = mc_path_detail_df.sort_values(
-            ["path_id", "year", "bucket_name"]
+            ["path_id", "year", "bucket_kind", "bucket_name"]
         ).reset_index(drop=True)
     else:
         mc_path_detail_df = pd.DataFrame(columns=_detail_cols)
 
     if mc_config.keep_path_detail:
-        mc_year_summary_df = build_mc_year_summary(mc_path_detail_df)
+        # Year / bucket summaries operate on the LIQUID track only — term rows
+        # are a projected sidecar and must not pollute liquid aggregates.
+        if "bucket_kind" in mc_path_detail_df.columns:
+            _liquid_detail_df = mc_path_detail_df[mc_path_detail_df["bucket_kind"] == "liquid"]
+        else:
+            _liquid_detail_df = mc_path_detail_df
+        mc_year_summary_df = build_mc_year_summary(_liquid_detail_df)
         mc_bucket_summary_df = build_mc_bucket_summary(
-            mc_path_detail_df=mc_path_detail_df,
+            mc_path_detail_df=_liquid_detail_df,
             mc_path_summary_df=mc_path_summary_df,
         )
     else:
@@ -2988,6 +2169,33 @@ def run_bucket_engine_monte_carlo_level2(
     else:
         mc_path_asset_detail_df = pd.DataFrame(columns=_asset_cols)
 
+    # ---- Term-asset purchase-skip summary ----
+    # One row per term asset. Aggregates the per-path term_skipped__<name> flags
+    # into the share of simulated paths where the asset could NOT be purchased
+    # because the LONG bucket lacked the minimum investment at its lock moment.
+    _term_skip_cols = ["term_name", "buy_year", "n_paths", "n_skipped", "skip_probability"]
+    if _n_term > 0 and not mc_path_summary_df.empty:
+        _n_paths_total = int(mc_path_summary_df["path_id"].nunique())
+        _skip_rows = []
+        for _t in _term_ctx["term_list"]:
+            _col = f"term_skipped__{_t.name}"
+            if _col in mc_path_summary_df.columns:
+                _n_skipped = int(mc_path_summary_df[_col].astype(bool).sum())
+            else:
+                _n_skipped = 0
+            _skip_rows.append({
+                "term_name": str(_t.name),
+                "buy_year": int(_t.buy_year),
+                "n_paths": _n_paths_total,
+                "n_skipped": _n_skipped,
+                "skip_probability": (
+                    round(_n_skipped / _n_paths_total, 6) if _n_paths_total > 0 else 0.0
+                ),
+            })
+        mc_term_skip_summary_df = pd.DataFrame(_skip_rows, columns=_term_skip_cols)
+    else:
+        mc_term_skip_summary_df = pd.DataFrame(columns=_term_skip_cols)
+
     return BucketMCResult(
         bucket_requirement_df=bucket_requirement_df,
         initial_allocation_df=initial_allocation_df,
@@ -2997,6 +2205,5 @@ def run_bucket_engine_monte_carlo_level2(
         mc_path_summary_df=mc_path_summary_df,
         mc_path_detail_df=mc_path_detail_df,
         mc_path_asset_detail_df=mc_path_asset_detail_df,
+        mc_term_skip_summary_df=mc_term_skip_summary_df,
     )
-
-

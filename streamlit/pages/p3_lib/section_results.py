@@ -24,6 +24,7 @@ from .helpers import (
     fmt_c as _fmt_c,
     bucket_fingerprint as _bucket_fingerprint,
     saving_fingerprint as _saving_fingerprint,
+    term_fingerprint as _term_fingerprint,
     analyze_mc_result as analyze_mc_result_local,
 )
 
@@ -76,6 +77,14 @@ def render(
             "เปลี่ยนไปหลังการ simulation ครั้งล่าสุด"
         )
 
+    # (3) term assets edited after the run (not covered by bucket_fingerprint).
+    _current_term_fp = _term_fingerprint(st.session_state.get("inv_term_assets", []))
+    _saved_term_fp = st.session_state.get("inv_mc_term_fingerprint")
+    if _saved_term_fp is not None and _saved_term_fp != _current_term_fp:
+        _stale_msgs.append(
+            "การตั้งค่า **term asset** เปลี่ยนไปหลังการ simulation ครั้งล่าสุด"
+        )
+
     if _stale_msgs:
         st.warning(
             "⚠️ " + " | ".join(_stale_msgs)
@@ -105,6 +114,29 @@ def render(
     # Consume the one-shot flag (no-op now — kept so existing setters don't
     # leave stale flags in session_state).
     st.session_state.pop("_p3_scroll_to_results", False)
+
+    # ── Term-asset purchase-skip warning ──────────────────────────────────
+    # Surface scenarios where a term asset could NOT be bought because the
+    # LONG bucket lacked the minimum investment at its lock moment. Sourced
+    # from the engine's mc_term_skip_summary_df (one row per term asset).
+    _term_skip_df = getattr(mc_result, "mc_term_skip_summary_df", None)
+    if _term_skip_df is not None and not _term_skip_df.empty \
+            and "skip_probability" in _term_skip_df.columns:
+        _skipped = _term_skip_df[_term_skip_df["skip_probability"] > 0]
+        if not _skipped.empty:
+            _skip_msgs = []
+            for _, _sr in _skipped.iterrows():
+                _pct = float(_sr["skip_probability"]) * 100.0
+                _skip_msgs.append(
+                    f"**{_sr['term_name']}** (ซื้อปี {int(_sr['buy_year'])}): "
+                    f"ซื้อไม่สำเร็จใน {_pct:.0f}% ของ scenario "
+                    f"({int(_sr['n_skipped'])}/{int(_sr['n_paths'])} paths) "
+                    f"เพราะเงินที่ใช้ลงทุนหักจากเงินหลังเผื่อค่าใช้จ่ายไม่เพียงพอ"
+                )
+            st.warning(
+                "⚠️ **Term asset บางตัวซื้อไม่สำเร็จในบาง scenario:**\n\n- "
+                + "\n- ".join(_skip_msgs)
+            )
 
     # Compact currency formatter used by every chart in this section.
     # Defined here so it's in scope even when individual data frames are empty.
@@ -265,7 +297,7 @@ def render(
             range=["#217A47", "#C44E27", "#1A6FC4"],
         )
 
-        st.markdown("#### 1. 💰 เงินสะสมเฉลี่ย vs ค่าใช้จ่ายสะสม")
+        st.markdown("#### 1. 💰 เงินสะสมเฉลี่ย vs ค่าใช้จ่ายสะสม — มูลค่า ณ สิ้นปี")
         st.caption(
             "แถบเขียวอ่อน = ช่วง P10–P90 ของเงินสะสม+ผลตอบแทน | "
             "แถบฟ้าอ่อน = ช่วง P10–P90 ของเงินคงเหลือ (80% ของ simulation) | "
@@ -360,7 +392,22 @@ def render(
         range=_bucket_color_range[:len(_bucket_domain)] if _bucket_domain else _bucket_color_range,
     )
 
-    _path_detail_df = getattr(mc_result, "mc_path_detail_df", None)
+    _path_detail_full = getattr(mc_result, "mc_path_detail_df", None)
+    # Split the detail track: liquid rows feed the bucket-balance / realized-
+    # return charts (term is an illiquid sidecar that would distort those
+    # aggregates); term rows feed the dedicated term-asset visualizations.
+    if (
+        _path_detail_full is not None
+        and not _path_detail_full.empty
+        and "bucket_kind" in _path_detail_full.columns
+    ):
+        _path_detail_df = _path_detail_full[_path_detail_full["bucket_kind"] == "liquid"].copy()
+        _term_detail_df = _path_detail_full[_path_detail_full["bucket_kind"] == "term"].copy()
+    else:
+        _path_detail_df = _path_detail_full
+        _term_detail_df = (
+            _path_detail_full.iloc[0:0].copy() if _path_detail_full is not None else pd.DataFrame()
+        )
 
     # Pre-process year_summary_df once — shared by Shortfall (Chart 4) and
     # Balance (Chart 6) charts. year_summary_df has P10/P50/P90 per bucket
@@ -540,95 +587,132 @@ def render(
     # ============================================================
     # CHART 3: Annualized return (CAGR) distribution
     # ============================================================
-    # ── R6.5: Annualized Return Distribution (dollar-weighted, full horizon) ──
-    # Realized CAGR per path = Σ(beginning_balance × sampled_return) / Σ(beginning_balance)
-    # over ALL years × buckets. ใช้ beginning_balance เป็น weight เหมือน Task 5
-    # แต่ขยาย window จาก 3 ปีแรก → ทุกปี เพื่อสะท้อนผลตอบแทนเฉลี่ยตลอดแผน
+    # ── Chart 3: realized annualized return, with a scope selector ──
+    # Per path, dollar-weighted realized return = Σ investment_return / Σ BB over
+    # the selected scope (total incl. term, a single liquid bucket, or a single
+    # term asset). Using actual investment_return keeps the term payout year
+    # (return = 0) from distorting the figure.
+    _c3_full = _path_detail_full
     if (
-        _path_detail_df is not None
-        and not _path_detail_df.empty
-        and {"path_id", "sampled_return", "beginning_balance"}.issubset(
-            _path_detail_df.columns
-        )
+        _c3_full is not None
+        and not _c3_full.empty
+        and {"path_id", "investment_return", "beginning_balance", "bucket_kind", "bucket_name"}.issubset(_c3_full.columns)
     ):
-        _cagr_src = _path_detail_df[
-            ["path_id", "sampled_return", "beginning_balance"]
-        ].copy()
-        _cagr_src["sampled_return"] = _cagr_src["sampled_return"].astype(float)
-        _cagr_src["beginning_balance"] = _cagr_src["beginning_balance"].astype(float)
-        _cagr_src["_weighted_ret"] = (
-            _cagr_src["beginning_balance"] * _cagr_src["sampled_return"]
+        st.markdown("#### 3. 📈 ผลตอบแทนต่อปีที่เกิดขึ้นจริง (Annualized Return)")
+        st.caption("ผลตอบแทนต่อปีที่แต่ละ simulation ทำได้")
+
+        _b0_c3 = str(_new_defs[0]["name"]) if len(_new_defs) >= 1 else None
+        _b1_c3 = str(_new_defs[1]["name"]) if len(_new_defs) >= 2 else None
+        _C3_TOTAL = "ภาพรวมผลตอบแทน"
+        _c3_opts = [_C3_TOTAL]
+        if _b0_c3:
+            _c3_opts.append(_b0_c3)
+        if _b1_c3:
+            _c3_opts.append(_b1_c3)
+        _c3_term_names = (
+            sorted(_term_detail_df["bucket_name"].astype(str).unique().tolist())
+            if (
+                _term_detail_df is not None
+                and not _term_detail_df.empty
+                and "bucket_name" in _term_detail_df.columns
+            )
+            else []
         )
-        _cagr_agg = _cagr_src.groupby("path_id", as_index=True).agg(
-            _num=("_weighted_ret", "sum"),
+        _c3_opts += [f"Term: {_n}" for _n in _c3_term_names]
+
+        _c3_sel = st.radio(
+            "เลือกขอบเขตผลตอบแทน",
+            options=_c3_opts,
+            index=0,
+            horizontal=True,
+            key="cagr_scope_select",
+            label_visibility="collapsed",
+        )
+
+        if _c3_sel == _C3_TOTAL:
+            _c3_sub = _c3_full
+        elif _c3_sel.startswith("Term: "):
+            _c3_nm = _c3_sel[len("Term: "):]
+            _c3_sub = _c3_full[
+                (_c3_full["bucket_kind"] == "term")
+                & (_c3_full["bucket_name"].astype(str) == _c3_nm)
+            ]
+        else:
+            _c3_sub = _c3_full[
+                (_c3_full["bucket_kind"] == "liquid")
+                & (_c3_full["bucket_name"].astype(str) == _c3_sel)
+            ]
+
+        # Term payout/withdrawal years earn no return by design (BB = matured
+        # value, return = 0); excluding them keeps a term's realized rate from
+        # being diluted by its final cash-out year. Liquid rows are untouched.
+        if {"bucket_kind", "transfer_out"}.issubset(_c3_sub.columns):
+            _c3_sub = _c3_sub[
+                ~(
+                    (_c3_sub["bucket_kind"] == "term")
+                    & (_c3_sub["transfer_out"].astype(float) > 0)
+                )
+            ]
+
+        _c3s = _c3_sub[["path_id", "investment_return", "beginning_balance"]].copy()
+        _c3s["investment_return"] = _c3s["investment_return"].astype(float)
+        _c3s["beginning_balance"] = _c3s["beginning_balance"].astype(float)
+        _c3_agg = _c3s.groupby("path_id", as_index=True).agg(
+            _num=("investment_return", "sum"),
             _den=("beginning_balance", "sum"),
         )
-        _cagr_agg = _cagr_agg[_cagr_agg["_den"] > 0]
-        _path_cagr = (_cagr_agg["_num"] / _cagr_agg["_den"]).rename("realized_cagr")
+        _c3_agg = _c3_agg[_c3_agg["_den"] > 0]
+        _path_cagr = (_c3_agg["_num"] / _c3_agg["_den"]).rename("realized_cagr")
 
         if not _path_cagr.empty:
-            # Expected return: initial-allocation-weighted bucket mean
+            # Expected-return reference line: allocation-weighted for the total
+            # scope, the bucket's own discount_rate for a single liquid bucket,
+            # omitted for a single term asset.
             _expected_ret = None
-            _alloc_df_exp = getattr(mc_result, "initial_allocation_df", pd.DataFrame())
-            if (
-                not _alloc_df_exp.empty
-                and "recommended_initial_amount" in _alloc_df_exp.columns
-                and "bucket_name" in _alloc_df_exp.columns
-            ):
-                _bucket_exp_map = {
-                    str(d["name"]): float(d.get("discount_rate", 0.0))
-                    for d in _new_defs
-                }
-                _alloc_sum = float(_alloc_df_exp["recommended_initial_amount"].sum())
-                if _alloc_sum > 0:
-                    _expected_ret = sum(
-                        float(r["recommended_initial_amount"])
-                        * _bucket_exp_map.get(str(r["bucket_name"]), 0.0)
-                        for _, r in _alloc_df_exp.iterrows()
-                    ) / _alloc_sum
+            if _c3_sel == _C3_TOTAL:
+                _alloc_df_exp = getattr(mc_result, "initial_allocation_df", pd.DataFrame())
+                if (
+                    not _alloc_df_exp.empty
+                    and "recommended_initial_amount" in _alloc_df_exp.columns
+                    and "bucket_name" in _alloc_df_exp.columns
+                ):
+                    _bucket_exp_map = {
+                        str(d["name"]): float(d.get("discount_rate", 0.0))
+                        for d in _new_defs
+                    }
+                    _alloc_sum = float(_alloc_df_exp["recommended_initial_amount"].sum())
+                    if _alloc_sum > 0:
+                        _expected_ret = sum(
+                            float(r["recommended_initial_amount"])
+                            * _bucket_exp_map.get(str(r["bucket_name"]), 0.0)
+                            for _, r in _alloc_df_exp.iterrows()
+                        ) / _alloc_sum
+            elif not _c3_sel.startswith("Term: "):
+                _bmap_c3 = {str(d["name"]): float(d.get("discount_rate", 0.0)) for d in _new_defs}
+                _expected_ret = _bmap_c3.get(_c3_sel)
 
             _cagr_p10 = float(_path_cagr.quantile(0.10))
             _cagr_p50 = float(_path_cagr.quantile(0.50))
             _cagr_p90 = float(_path_cagr.quantile(0.90))
-
-            st.markdown("#### 3. 📈 ผลตอบแทนต่อปีที่เกิดขึ้นจริง (Annualized Return) — กระจายตัวทุกเส้นทาง")
-            st.caption(
-                "ผลตอบแทนต่อปีที่แต่ละ simulation ทำได้จริง "
-                "(เฉลี่ยตลอดแผน ถ่วงน้ำหนักด้วยเงินที่มีในแต่ละปี) "
-                "— เทียบกับ ‘ผลตอบแทนเฉลี่ย’ ที่ตั้งไว้ตอนเลือก asset"
-            )
 
             _cagr_hist_df = pd.DataFrame({"cagr_pct": _path_cagr.values * 100})
             _cagr_hist = (
                 alt.Chart(_cagr_hist_df)
                 .mark_bar(opacity=0.75, color="#FEF3C7")
                 .encode(
-                    x=alt.X(
-                        "cagr_pct:Q",
-                        bin=alt.Bin(maxbins=40),
-                        title="ผลตอบแทนต่อปี %",
-                        axis=alt.Axis(format=".2f"),
-                    ),
+                    x=alt.X("cagr_pct:Q", bin=alt.Bin(maxbins=40), title="ผลตอบแทนต่อปี %", axis=alt.Axis(format=".2f")),
                     y=alt.Y("count():Q", title="จำนวนเส้นทาง"),
                     tooltip=[
-                        alt.Tooltip(
-                            "cagr_pct:Q",
-                            bin=alt.Bin(maxbins=40),
-                            title="ช่วงผลตอบแทน %",
-                            format=".2f",
-                        ),
+                        alt.Tooltip("cagr_pct:Q", bin=alt.Bin(maxbins=40), title="ช่วงผลตอบแทน %", format=".2f"),
                         alt.Tooltip("count():Q", title="จำนวนเส้นทาง"),
                     ],
                 )
             )
-
-            # ── P10/P50/P90 lines (gray, label at y=14) ──
-            _pctile_rows = [
+            _pctile_df = pd.DataFrame([
                 {"x": _cagr_p10 * 100, "label": f"P10: {_cagr_p10 * 100:.2f}%"},
                 {"x": _cagr_p50 * 100, "label": f"P50: {_cagr_p50 * 100:.2f}%"},
                 {"x": _cagr_p90 * 100, "label": f"P90: {_cagr_p90 * 100:.2f}%"},
-            ]
-            _pctile_df = pd.DataFrame(_pctile_rows)
+            ])
             _pctile_lines = (
                 alt.Chart(_pctile_df)
                 .mark_rule(strokeDash=[5, 3], strokeWidth=1.5, color="#a6acb3")
@@ -639,10 +723,7 @@ def render(
                 .mark_text(fontSize=14, fontWeight="bold", color="#a9acb0")
                 .encode(x="x:Q", y=alt.value(14), text="label:N")
             )
-
             _cagr_layers = [_cagr_hist, _pctile_lines, _pctile_labels]
-
-            # ── ผลตอบแทนเฉลี่ย line (blue, label at y=32 — ใต้ P50) ──
             if _expected_ret is not None:
                 _exp_df = pd.DataFrame([{
                     "x": _expected_ret * 100,
@@ -664,6 +745,9 @@ def render(
                 alt.layer(*_cagr_layers).properties(height=300),
                 width="stretch",
             )
+        else:
+            st.info("ไม่มีข้อมูลผลตอบแทนสำหรับขอบเขตที่เลือก")
+
 
     # ============================================================
     # CHART 4: Shortfall probability per year (Liquidity bucket)
@@ -824,7 +908,9 @@ def render(
     #   6.3 bucket 1 (bill-paying) — band + mean + target (rolling window)
     # ============================================================
     if not chart_df.empty and len(_new_defs) >= 2:
-        st.markdown("#### 5. 💼 การจัดสรรเงินในแต่ละปี — ภาพรวม + รายละเอียดแต่ละ bucket")
+        st.markdown("#### 5. 💼 การจัดสรรเงินในแต่ละปี — มูลค่า ณ ต้นปี")
+        # Shared x-axis domain so every chart-5 graph spans the same years.
+        _all_years_c5 = sorted(chart_df["year"].astype(int).unique().tolist())
         _b0_name = str(_new_defs[0]["name"])  # bucket 1 (bill-paying)
         _b1_name = str(_new_defs[1]["name"])  # bucket 2 (long / growth)
 
@@ -839,16 +925,55 @@ def render(
             _stack_df["bucket_name"].map({_b0_name: 0, _b1_name: 1})
             .fillna(99).astype(int)
         )
-        st.markdown("##### 5.1 ภาพรวมการจัดสรรเงิน")
-        st.caption(
-            f"🟦 **{_b0_name}** | "
-            f"🟩 **{_b1_name}**"
+
+        # Term-asset stack: mean total term holding (start-of-year value) per
+        # year, layered on top of the liquid buckets.
+        _TERM_STACK_LABEL = "สินทรัพย์มีกำหนด"
+        _term_stack_df = pd.DataFrame()
+        if (
+            _term_detail_df is not None
+            and not _term_detail_df.empty
+            and {"path_id", "year", "beginning_balance"}.issubset(_term_detail_df.columns)
+        ):
+            _tm_py = (
+                _term_detail_df.groupby(["path_id", "year"], as_index=False)["beginning_balance"]
+                .sum()
+            )
+            _tm_year = (
+                _tm_py.groupby("year", as_index=False)["beginning_balance"]
+                .mean()
+                .rename(columns={"beginning_balance": "mean_beginning_balance"})
+            )
+            _tm_year = _tm_year[_tm_year["mean_beginning_balance"] > 0]
+            if not _tm_year.empty:
+                _tm_year["bucket_name"] = _TERM_STACK_LABEL
+                _tm_year["bucket_th"] = _TERM_STACK_LABEL
+                _tm_year["_stack_order"] = 2
+                _term_stack_df = _tm_year[
+                    ["year", "bucket_name", "bucket_th", "mean_beginning_balance", "_stack_order"]
+                ]
+        if not _term_stack_df.empty:
+            _stack_df = pd.concat([_stack_df, _term_stack_df], ignore_index=True)
+
+        # Color scale extended with the term series (orange) for this stack only.
+        _stack_color_scale = alt.Scale(
+            domain=_bucket_domain + [_TERM_STACK_LABEL],
+            range=(
+                (_bucket_color_range[:len(_bucket_domain)] if _bucket_domain else _bucket_color_range)
+                + ["#f59e0b"]
+            ),
         )
+
+        st.markdown("##### 5.1 ภาพรวมการจัดสรรเงิน")
+        _legend_parts = [f"🟦 **{_b0_name}**", f"🟩 **{_b1_name}**"]
+        if not _term_stack_df.empty:
+            _legend_parts.append(f"🟧 **{_TERM_STACK_LABEL}**")
+        st.caption(" | ".join(_legend_parts))
         _stack_area = (
             alt.Chart(_stack_df)
             .mark_area(opacity=0.85)
             .encode(
-                x=alt.X("year:O", title="ปี"),
+                x=alt.X("year:O", title="ปี", scale=alt.Scale(domain=_all_years_c5)),
                 y=alt.Y(
                     "mean_beginning_balance:Q",
                     stack="zero",
@@ -856,7 +981,7 @@ def render(
                     axis=alt.Axis(format=",.0f"),
                 ),
                 color=alt.Color(
-                    "bucket_th:N", scale=_bucket_color_scale, legend=None,
+                    "bucket_th:N", scale=_stack_color_scale, legend=None,
                 ),
                 order=alt.Order("_stack_order:Q"),
                 tooltip=[
@@ -868,7 +993,7 @@ def render(
             .properties(height=300)
         )
 
-        # ── Total label per year (sum of bucket 1 + bucket 2) on top of stack ──
+        # ── Total label per year (sum across buckets + term) on top of stack ──
         _total_per_year = (
             _stack_df.groupby("year", as_index=False)["mean_beginning_balance"]
             .sum()
@@ -981,10 +1106,10 @@ def render(
             alt.Chart(_band_df_b)
             .mark_area(opacity=0.15)
             .encode(
-                x=alt.X("year:O", title="ปี"),
+                x=alt.X("year:O", title="ปี", scale=alt.Scale(domain=_all_years_c5)),
                 y=alt.Y("p10_beginning_balance:Q",
                         title="ยอดเงิน ณ ต้นปี (บาท)",
-                        axis=alt.Axis(format=",")),
+                        axis=alt.Axis(format=",.0f")),
                 y2=alt.Y2("p90_beginning_balance:Q"),
                 color=alt.Color("bucket_th:N", scale=_bucket_color_scale, legend=None),
                 opacity=alt.Opacity(
@@ -1002,7 +1127,7 @@ def render(
             .mark_line(point=True)
             .encode(
                 x=alt.X("year:O"),
-                y=alt.Y("value:Q", axis=alt.Axis(format=",")),
+                y=alt.Y("value:Q", axis=alt.Axis(format=",.0f")),
                 color=alt.Color(
                     "bucket_th:N", scale=_bucket_color_scale, legend=None,
                 ),
@@ -1056,16 +1181,105 @@ def render(
         )
 
     if not chart_df.empty and len(_new_defs) >= 2:
-        # ── 6.2 bucket 2 (long) — no target ──
+        # ── 5.2 Term-asset allocation — P10–P90 band + mean, per asset ──
+        st.markdown(
+            "##### 5.2 การจัดสรรเงินลงทุนในสินทรัพย์แบบมีกำหนดระยะเวลา — แถบ P10–P90, เส้นค่าเฉลี่ย"
+        )
+        if (
+            _term_detail_df is not None
+            and not _term_detail_df.empty
+            and {"path_id", "year", "bucket_name", "beginning_balance"}.issubset(
+                _term_detail_df.columns
+            )
+        ):
+            _tasset_stats = (
+                _term_detail_df.groupby(["bucket_name", "year"], as_index=False)["beginning_balance"]
+                .agg(
+                    p10=lambda s: float(s.quantile(0.10)),
+                    mean_v="mean",
+                    p90=lambda s: float(s.quantile(0.90)),
+                )
+            )
+            # Keep ALL years (the engine emits a term row every year) so the
+            # x-axis lines up with the other chart-5 graphs.
+            if not _tasset_stats.empty:
+                _tasset_stats["year"] = _tasset_stats["year"].astype(int)
+                _tasset_stats["mean_label"] = _tasset_stats["mean_v"].apply(_fmt_c)
+                # Plot only held years (drop 0 rows), but keep the x-axis spanning
+                # every plan year so it lines up with 5.1 / 5.3 / 5.4.
+                _tasset_held = _tasset_stats[
+                    (_tasset_stats["mean_v"].abs() > 1e-9)
+                    | (_tasset_stats["p90"].abs() > 1e-9)
+                ]
+                _all_years_c5 = sorted(chart_df["year"].astype(int).unique().tolist())
+                _x_c52 = alt.X("year:O", title="ปี", scale=alt.Scale(domain=_all_years_c5))
+                # Orange/yellow palette per asset (echoes the 5.1 term stack);
+                # legend shown in the caption instead of on the chart.
+                _t_assets_c52 = sorted(_tasset_held["bucket_name"].astype(str).unique().tolist())
+                _T52_PAL = ["#f97316", "#eab308", "#fb923c", "#f59e0b", "#facc15", "#d97706"]
+                _T52_EMO = ["🟧", "🟨", "🟧", "🟨", "🟧", "🟨"]
+                _t52_colors = [_T52_PAL[_i % len(_T52_PAL)] for _i in range(len(_t_assets_c52))]
+                _t52_scale = alt.Scale(domain=_t_assets_c52, range=_t52_colors)
+                st.caption(
+                    " | ".join(
+                        f"{_T52_EMO[_i % len(_T52_EMO)]} **{_a}**"
+                        for _i, _a in enumerate(_t_assets_c52)
+                    )
+                )
+                _tband = (
+                    alt.Chart(_tasset_held)
+                    .mark_area(opacity=0.15)
+                    .encode(
+                        x=_x_c52,
+                        y=alt.Y("p10:Q", title="ยอดเงิน ณ ต้นปี (บาท)", axis=alt.Axis(format=",.0f")),
+                        y2=alt.Y2("p90:Q"),
+                        color=alt.Color("bucket_name:N", scale=_t52_scale, legend=None),
+                    )
+                )
+                _tmean = (
+                    alt.Chart(_tasset_held)
+                    .mark_line(point=True)
+                    .encode(
+                        x=_x_c52,
+                        y=alt.Y("mean_v:Q"),
+                        color=alt.Color("bucket_name:N", scale=_t52_scale, legend=None),
+                        tooltip=[
+                            alt.Tooltip("bucket_name:N", title="สินทรัพย์"),
+                            alt.Tooltip("year:O", title="ปี"),
+                            alt.Tooltip("mean_v:Q", title="ค่าเฉลี่ย", format=",.0f"),
+                            alt.Tooltip("p10:Q", title="P10", format=",.0f"),
+                            alt.Tooltip("p90:Q", title="P90", format=",.0f"),
+                        ],
+                    )
+                )
+                _tlabels = (
+                    alt.Chart(_tasset_held)
+                    .mark_text(dy=-12, fontSize=14, fontWeight="bold")
+                    .encode(
+                        x=_x_c52,
+                        y=alt.Y("mean_v:Q"),
+                        text=alt.Text("mean_label:N"),
+                        color=alt.Color("bucket_name:N", scale=_t52_scale, legend=None),
+                    )
+                )
+                st.altair_chart(
+                    alt.layer(_tband, _tmean, _tlabels).properties(height=320),
+                    width="stretch",
+                )
+            else:
+                st.info("ยังไม่มีสินทรัพย์แบบมีกำหนดระยะเวลาในแผนนี้")
+        else:
+            st.info("ยังไม่มีสินทรัพย์แบบมีกำหนดระยะเวลาในแผนนี้")
+        # ── 5.3 bucket 2 (long) — no target ──
         _render_per_bucket_chart(
             _b1_name,
-            "##### 5.2 การจัดสรรเงินสำหรับลงทุนเพื่อการศึกษา — แถบ P10–P90, เส้นค่าเฉลี่ย",
+            "##### 5.3 การจัดสรรเงินสำหรับลงทุนเพื่อการศึกษา — แถบ P10–P90, เส้นค่าเฉลี่ย",
             _show_target=False,
         )
-        # ── 6.3 bucket 1 (bill-paying) — with target ──
+        # ── 5.4 bucket 1 (bill-paying) — with target ──
         _render_per_bucket_chart(
             _b0_name,
-            "##### 5.3 การจัดสรรเงินสำหรับค่าใช้จ่าย — แถบ P10–P90, เส้นค่าเฉลี่ย, เส้นประแสดงเป้าหมายเพื่อให้ครอบคลุมค่าใช้จ่าย",
+            "##### 5.4 การจัดสรรเงินสำหรับค่าใช้จ่าย — แถบ P10–P90, เส้นค่าเฉลี่ย, เส้นประแสดงเป้าหมายเพื่อให้ครอบคลุมค่าใช้จ่าย",
             _show_target=True,
         )
 
@@ -1162,7 +1376,7 @@ def render(
             .encode(
                 x=alt.X("year:O", title="ปี"),
                 y=alt.Y("p10_beginning_balance:Q", title="ยอดเงิน ณ ต้นปี (บาท)",
-                        axis=alt.Axis(format=",")),
+                        axis=alt.Axis(format=",.0f")),
                 y2=alt.Y2("p90_beginning_balance:Q"),
                 color=alt.Color("bucket_th:N", scale=_bucket_color_scale, legend=None),
                 opacity=alt.Opacity(
@@ -1180,7 +1394,7 @@ def render(
             .encode(
                 x=alt.X("year:O", title="ปี"),
                 y=alt.Y("value:Q", title="ยอดเงิน ณ ต้นปี (บาท)",
-                        axis=alt.Axis(format=",")),
+                        axis=alt.Axis(format=",.0f")),
                 color=alt.Color("bucket_th:N", scale=_bucket_color_scale, title="กลุ่มลงทุน"),
                 strokeDash=alt.StrokeDash(
                     "series:N",
@@ -1267,6 +1481,7 @@ def render(
                 "year_start": ("year", "min"),
                 "year_end":   ("year", "max"),
                 "avg_inflated": ("inflated_amount", "mean"),
+                "total_inflated": ("inflated_amount", "sum"),
             }
             if "child_age" in _edu_src.columns:
                 _agg_dict["age_start"] = ("child_age", "min")
@@ -1279,6 +1494,26 @@ def render(
             _tl_df["year_start"] = _tl_df["year_start"].astype(int)
             _tl_df["year_end"]   = _tl_df["year_end"].astype(int)
             _tl_df["year_end_excl"] = _tl_df["year_end"] + 1
+            # Include the child's OTHER (non-education) expenses that fall within
+            # each level's year window, attributed by the year they occur.
+            # Parent expenses stay excluded.
+            _np_tl = expense_df[expense_df["child_name"].astype(str) != "Parent"]
+            _cy_tl = (
+                _np_tl.groupby(["child_name", "year"])["inflated_amount"].sum()
+                if not _np_tl.empty else pd.Series(dtype=float)
+            )
+            _tl_df["total_inflated"] = _tl_df.apply(
+                lambda r: float(sum(
+                    float(_cy_tl.get((str(r["child_name"]), _yy), 0.0))
+                    for _yy in range(int(r["year_start"]), int(r["year_end"]) + 1)
+                )),
+                axis=1,
+            )
+            _tl_df["avg_inflated"] = _tl_df["total_inflated"] / (
+                _tl_df["year_end"].astype(int) - _tl_df["year_start"].astype(int) + 1
+            ).clip(lower=1)
+            _tl_df["_mid"] = (_tl_df["year_start"] + _tl_df["year_end_excl"]) / 2.0
+            _tl_df["_total_label"] = _tl_df["total_inflated"].apply(_fmt_c)
             # Translate sub_category keys → Thai labels so colors match
             # Page 2 Chart 2 (which also stores translated labels in sub_category)
             _tl_df["ระดับ"] = _tl_df["sub_category"].astype(str).apply(edu_level_label)
@@ -1303,6 +1538,7 @@ def render(
                 alt.Tooltip("year_start:Q",   title="ปีเริ่ม",   format="d"),
                 alt.Tooltip("year_end:Q",     title="ปีจบ",     format="d"),
                 alt.Tooltip("avg_inflated:Q", title="ค่าใช้จ่ายเฉลี่ย/ปี (฿)", format=",.0f"),
+                alt.Tooltip("total_inflated:Q", title="ค่าใช้จ่ายรวม (฿)", format=",.0f"),
             ]
             if "age_start" in _tl_df.columns:
                 _tt.insert(3, alt.Tooltip("age_start:Q", title="อายุเริ่ม", format="d"))
@@ -1330,14 +1566,26 @@ def render(
                 )
                 .properties(height=max(70 * max(_n_children_tl, 1), 160))
             )
-            st.altair_chart(_tl_chart, width="stretch")
+            _tl_labels = (
+                alt.Chart(_tl_df)
+                .mark_text(fontSize=18, fontWeight="bold", color="#1f2937")
+                .encode(
+                    x=alt.X("_mid:Q"),
+                    y=alt.Y("child_name:N", sort=None),
+                    text=alt.Text("_total_label:N"),
+                    tooltip=_tt,
+                )
+            )
+            st.altair_chart(_tl_chart + _tl_labels, width="stretch")
         else:
             st.info("ไม่มีค่าใช้จ่ายการศึกษาในแผนนี้")
     else:
         st.info("ไม่มีข้อมูลค่าใช้จ่ายสำหรับสร้าง timeline")
 
     # ── Goal FR computation (renders the goal summary table inside Chart 6) ──
-    _goal_path_df = getattr(mc_result, "mc_path_detail_df", pd.DataFrame())
+    # Liquid-only: term money is illiquid and cannot pay education expenses,
+    # so "money available before expense" must exclude the term sidecar.
+    _goal_path_df = _path_detail_df if _path_detail_df is not None else pd.DataFrame()
     if (
         expense_df is not None
         and not expense_df.empty
@@ -1419,7 +1667,17 @@ def render(
                 _paid_py["_pre_expense"] >= _paid_py["_attempted"] - _ROUND_TOL,
                 _paid_py["_pre_expense"].clip(lower=0.0),
             )
-            _paid_py = _paid_py[["path_id", "year", "total_paid"]]
+            # Realized payment fraction (0..1): the share of each year's SIMULATED
+            # expense the portfolio could actually cover. Applied to the child's
+            # FULL bill (education + extras) below, so extras are funded
+            # consistently with the cost column even when the engine modelled
+            # tuition only. At full success the fraction is 1.0.
+            _paid_py["_pay_frac"] = (
+                _paid_py["total_paid"]
+                / _paid_py["_attempted"].where(_paid_py["_attempted"] > 0, other=pd.NA)
+            )
+            _paid_py["_pay_frac"] = _paid_py["_pay_frac"].fillna(1.0).clip(lower=0.0, upper=1.0)
+            _paid_py = _paid_py[["path_id", "year", "_pay_frac"]]
 
             _goal_rows_summary = []
             for _, _g in _goals_df.iterrows():
@@ -1438,35 +1696,34 @@ def render(
                 # entire bill during that life chapter — keeps cost, paid, FR,
                 # P(จ่ายเต็ม), and ขาด on the same denominator so the displayed
                 # ratios are internally consistent.
-                _child_share_map = {}
+                _child_cost_map = {}
                 _cost_total = 0.0
                 for _y_iter in range(_ys, _ye + 1):
                     try:
                         _ch_amt = float(_child_year_inflated.loc[(_ch, _y_iter)])
                     except KeyError:
                         _ch_amt = 0.0
-                    try:
-                        _ann_amt = float(_annual_total.loc[_y_iter])
-                    except (KeyError, AttributeError):
-                        _ann_amt = 0.0
-                    _child_share_map[_y_iter] = (
-                        (_ch_amt / _ann_amt) if _ann_amt > 0 else 0.0
-                    )
+                    _child_cost_map[_y_iter] = _ch_amt
                     _cost_total += _ch_amt
 
                 if _cost_total <= 0:
                     continue
 
                 _paid_child_win = _paid_py[
-                    _paid_py["year"].isin(_child_share_map.keys())
+                    _paid_py["year"].isin(_child_cost_map.keys())
                 ].copy()
                 if _paid_child_win.empty:
                     continue
 
-                _paid_child_win["share"] = _paid_child_win["year"].map(_child_share_map)
+                # Funded = realized payment fraction × the child's FULL bill
+                # (education + extras) per window year. At full success the
+                # fraction is 1.0, so funded equals the displayed cost.
+                _paid_child_win["_child_cost_y"] = (
+                    _paid_child_win["year"].map(_child_cost_map).astype(float)
+                )
                 _paid_child_win["child_funded"] = (
-                    _paid_child_win["total_paid"].astype(float)
-                    * _paid_child_win["share"].astype(float)
+                    _paid_child_win["_pay_frac"].astype(float)
+                    * _paid_child_win["_child_cost_y"]
                 )
                 _child_funded_path = (
                     _paid_child_win.groupby("path_id")["child_funded"].sum()

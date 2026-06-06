@@ -135,6 +135,39 @@ def saving_fingerprint(
     )
 
 
+def term_fingerprint(term_assets: list) -> tuple:
+    """Hashable signature of term-asset config.
+    Used to detect stale MC results when the user edits term assets after a run.
+    Term assets are NOT captured by bucket_fingerprint, so without this an edit
+    to a term asset would silently leave stale Page-3 results unflagged.
+
+    Accepts either engine-ready TermAssetConfig objects or the editable dict
+    defs — fields are read by attribute first, then by key.
+    """
+    def _g(t, attr, default=None):
+        if isinstance(t, dict):
+            return t.get(attr, default)
+        return getattr(t, attr, default)
+
+    out = []
+    for t in term_assets or []:
+        _min = _g(t, "min_return")
+        _max = _g(t, "max_return")
+        out.append((
+            str(_g(t, "name", "")),
+            int(_g(t, "buy_year", 0) or 0),
+            round(float(_g(t, "min_initial_investment", 0.0) or 0.0), 2),
+            int(_g(t, "term_years", 0) or 0),
+            int(_g(t, "max_rollovers", 0) or 0),
+            round(float(_g(t, "mean_return", 0.0) or 0.0), 6),
+            round(float(_g(t, "std_dev", 0.0) or 0.0), 6),
+            (None if _min is None else round(float(_min), 6)),
+            (None if _max is None else round(float(_max), 6)),
+            str(_g(t, "distribution", "")),
+        ))
+    return tuple(out)
+
+
 # ──────────────────────────────────────────────────────
 # MC result analyzer
 # ──────────────────────────────────────────────────────
