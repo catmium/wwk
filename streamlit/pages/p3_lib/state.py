@@ -55,7 +55,7 @@ PARAM_DEFAULTS = {
         {
             "name": "สำหรับค่าใช้จ่าย",
             "year_start": 1,
-            "year_end": 2,
+            "year_end": 1,
             "discount_rate": 0.02,
             "assets": [
                 with_min_max({"asset_name": "FCD TD", "weight_pct": 50.0,
@@ -66,7 +66,7 @@ PARAM_DEFAULTS = {
         },
         {
             "name": "สำหรับลงทุนเพื่อการศึกษา",
-            "year_start": 3,
+            "year_start": 2,
             "year_end": None,
             "discount_rate": 0.04,
             "assets": [

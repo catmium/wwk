@@ -28,7 +28,7 @@ from .state import (
     PARAM_DEFAULTS,
     build_bucket_return_models_from_state,
 )
-from .helpers import analyze_mc_result, bucket_fingerprint, saving_fingerprint
+from .helpers import analyze_mc_result, bucket_fingerprint, saving_fingerprint, term_fingerprint
 
 
 # ──────────────────────────────────────────────────────
@@ -246,6 +246,7 @@ def run_mc(
             mc_config=mc_config,
             simulation_start_year=int(assumptions.start_year),
             initial_allocation_override_df=alloc_override,
+            term_assets=st.session_state.get("inv_term_assets", []),
             progress_callback=_mc_progress_callback,
             progress_update_every=10,
         )
@@ -270,6 +271,13 @@ def run_mc(
             float(saving_plan.initial_savings),
             annual_contribution_map,
             annual_topup_map,
+        )
+        # Term assets are NOT part of bucket_fingerprint — snapshot them
+        # separately so editing a term asset after this run flags Page-3
+        # results as stale. Read from inv_term_assets (rebuilt each rerun by
+        # section_bucket_config.render), same source the engine ran on.
+        st.session_state["inv_mc_term_fingerprint"] = term_fingerprint(
+            st.session_state.get("inv_term_assets", [])
         )
 
         # Persist bucket+asset config keyed by cust_id. Failures are non-fatal.
