@@ -1,6 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import re
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -181,9 +182,69 @@ total_funding   = _get_metric(summary_df, "total_funding", 0)
 if sufficient:
     st.success(S("p2", "status_ok"))
 else:
-    extra = _fmt(add_monthly)
-    yr    = S("p2", "shortfall_start", year=shortfall_year) if shortfall_year else ""
-    st.error(S("p2", "status_fail", extra=extra, yr=f"฿{_fmt(min_req)}"))
+    st.error(S("p2", "status_fail", extra=_fmt(add_monthly), min_req=_fmt(min_req)))
+
+    # ── Minimum investment return needed (at current contribution) ──
+    _sp_solve = st.session_state.get("saving_plan_obj")
+    _as_solve = st.session_state.get("assumptions_obj")
+    _ch_solve = st.session_state.get("children_obj")
+    _pe_solve = st.session_state.get("parent_expenses_obj") or []
+
+    if _sp_solve is not None and _as_solve is not None and _ch_solve is not None:
+        from dataclasses import replace as _dc_replace
+
+        def _is_suff_at_rate(rate: float) -> bool:
+            try:
+                _as_test = _dc_replace(_as_solve, investment_return_rate=float(rate))
+                _, _, _sum = simulate_education_plan(
+                    children=_ch_solve,
+                    saving_plan=_sp_solve,
+                    assumptions=_as_test,
+                    parent_expenses=_pe_solve,
+                )
+                _row = _sum.loc[_sum["metric"] == "is_current_plan_sufficient", "value"]
+                return bool(_row.iloc[0]) if not _row.empty else False
+            except Exception:
+                return False
+
+        _RATE_MAX = 0.30  # cap solver at 30% / year
+        _sig = (
+            float(_sp_solve.initial_savings),
+            float(_sp_solve.monthly_contribution),
+            float(_as_solve.general_inflation_rate),
+            float(_as_solve.education_inflation_rate),
+            int(getattr(_as_solve, "start_year", 0)),
+            len(_ch_solve),
+            len(_pe_solve),
+        )
+        _cache = st.session_state.get("_p2_min_return_cache", {})
+        if _cache.get("sig") == _sig:
+            _min_rate = _cache.get("rate")
+        else:
+            with st.spinner("กำลังคำนวณผลตอบแทนการลงทุนขั้นต่ำที่ต้องการ..."):
+                if not _is_suff_at_rate(_RATE_MAX):
+                    _min_rate = None
+                else:
+                    _lo, _hi = 0.0, _RATE_MAX
+                    for _ in range(18):  # ~0.0001 precision over 0..0.30
+                        _mid = (_lo + _hi) / 2
+                        if _is_suff_at_rate(_mid):
+                            _hi = _mid
+                        else:
+                            _lo = _mid
+                    _min_rate = _hi
+            st.session_state["_p2_min_return_cache"] = {"sig": _sig, "rate": _min_rate}
+
+        if _min_rate is None:
+            st.warning(
+                f"⚠️ ถึงแม้ปรับผลตอบแทนการลงทุนสูงถึง **{_RATE_MAX*100:.0f}% ต่อปี** "
+                f"ก็ยังไม่เพียงพอ — แนะนำให้เพิ่มเงินออม"
+            )
+        else:
+            st.info(
+                f"💡 หากไม่ต้องการเพิ่มเงิน คุณต้องลงทุนให้ได้ผลตอบแทน "
+                f"อย่างน้อย **{(_min_rate*100)+0.1:.1f}% ต่อปี** เพื่อให้เงินเพียงพอกับค่าใช้จ่าย"
+            )
 
 
 # KPI strip
@@ -201,7 +262,6 @@ k4.metric(S("p2", "kpi_peak_expense"), f"฿{_fmt(peak_expense)}",
           delta_color="off")
 k5.metric(S("p2", "kpi_invest_return"), f"฿{_fmt(total_return)}")
 
-st.markdown("---")
 
 # ============================================================
 # INTERACTIVE: ADJUST SIMULATION ASSUMPTIONS (no DB save)
@@ -218,7 +278,7 @@ if _sp_obj is not None and _as_obj is not None and _children_obj is not None:
     def _mark_assump_expanded():
         st.session_state["p2_assump_expanded"] = True
 
-    _assump_expanded = st.session_state.get("p2_assump_expanded", False)
+    _assump_expanded = st.session_state.get("p2_assump_expanded", True)
 
     with st.expander(S("p2", "assump_expander"), expanded=_assump_expanded):
         st.caption(S("p2", "assump_caption"))
@@ -449,7 +509,13 @@ line_labels = (
         x=alt.X("year:O"),
         y=alt.Y("value:Q"),
         text=alt.Text("label_text:N"),
-        color=alt.Color("label:N", scale=dark_color_scale, legend=None),
+        # Negative values (e.g. ending balance dropping below zero) render in red
+        # so the user can spot shortfalls without reading axis values.
+        color=alt.condition(
+            "datum.value < 0",
+            alt.value("#DC2626"),
+            alt.Color("label:N", scale=dark_color_scale, legend=None),
+        ),
     )
 )
 
@@ -511,6 +577,39 @@ if expense_chart_df.empty:
 elif missing:
     st.error(S("p2", "err_missing_cols", cols=missing))
 else:
+    # ── child filter: ทั้งหมด / Child 1 / Child 2 / ... ──
+    # ใช้ child_name ใน expense_df (parent rows ถ้ามีจะใช้ค่า "Parent")
+    _ALL_LABEL = "ทั้งหมด"
+    if "child_name" in expense_chart_df.columns:
+        _child_names = (
+            expense_chart_df["child_name"]
+            .dropna().astype(str).unique().tolist()
+        )
+        # เรียง: Child * ตามตัวเลขก่อน, แล้วค่อยอื่น ๆ (Parent ฯลฯ)
+        def _child_sort_key(n):
+            m = re.search(r"(\d+)", n)
+            if n.startswith("Child") and m:
+                return (0, int(m.group(1)), n)
+            return (1, 0, n)
+        _child_names = sorted(_child_names, key=_child_sort_key)
+        _filter_opts = [_ALL_LABEL] + _child_names
+        if len(_filter_opts) > 1:
+            _picked = st.radio(
+                "เลือกดู",
+                options=_filter_opts,
+                index=0,
+                horizontal=True,
+                key="chart2_child_filter",
+                label_visibility="collapsed",
+            )
+            if _picked != _ALL_LABEL:
+                expense_chart_df = expense_chart_df[
+                    expense_chart_df["child_name"].astype(str) == _picked
+                ].copy()
+                if expense_chart_df.empty:
+                    st.info(f"ไม่มีรายการค่าใช้จ่ายของ {_picked}")
+                    st.stop()
+
     # ── shared data prep ──
     expense_chart_df["year"] = pd.to_numeric(expense_chart_df["year"], errors="coerce")
     expense_chart_df["inflated_amount"] = pd.to_numeric(expense_chart_df["inflated_amount"], errors="coerce").fillna(0)

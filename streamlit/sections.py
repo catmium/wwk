@@ -32,7 +32,8 @@ from database import (
     has_previous_data as db_has_previous_data,
     get_latest_meta as db_get_latest_meta,
 )
-from school_fees import schools_for_level, CUSTOM_SCHOOL_SENTINEL
+from school_fees import schools_for_level, lookup as lookup_school_fee, CUSTOM_SCHOOL_SENTINEL
+from cost_of_living import load_cost_of_living
 
 from state import (
     _none_if_blank, _to_optional_int,
@@ -55,6 +56,612 @@ from presets import (
     collect_input_warnings,
     collect_input_errors,
 )
+
+
+# ============================================================
+# UI UTILITIES
+# ============================================================
+# Year-range constants used by all "year" inputs (parent extras, top-ups,
+# child extras, etc). ปีต่ำสุดผูกกับปีปัจจุบัน (กันคนกรอกปีย้อนหลังมั่ว);
+# ปีสูงสุดเผื่อ horizon ระดับมหาวิทยาลัย/ปริญญาเอกของลูกแรกเกิด
+YEAR_MIN_DEFAULT = date.today().year
+YEAR_MAX_DEFAULT = 2100
+
+# Caps for repeatable sections (children / edu / extras / parent / topups)
+MAX_N_CHILDREN = 10
+MIN_N_CHILDREN = 1          # ลูก ≥ 1 คน — น้อยกว่านี้ไม่มีอะไรให้ simulate
+MAX_N_EDU = 20
+MAX_N_EXTRA = 20
+MAX_N_PARENT_EXPENSES = 20
+MAX_N_TOPUPS = 20
+
+# Cap ทุก rate input (inflation / return / growth) ที่ 20% — เกินกว่านี้
+# มักหมายถึงผู้ใช้กรอกผิดหน่วย (%ต่อปี vs ต่อเดือน)
+RATE_MAX_PCT = 20.0
+
+
+def _btn_spacer(margin_top_px: int = 28):
+    """Vertical spacer to push a button's top down so it aligns with the
+    baseline of a `st.metric` in a neighbouring column. ใช้แทน <div> hack
+    ที่กระจัดกระจายไปทั้งไฟล์เดิม."""
+    st.markdown(
+        f"<div style='margin-top:{margin_top_px}px'></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# AUTO-FILL HELPER: build extra-expense rows from education plans
+# ============================================================
+# Marker prefix in the `note` field that identifies an auto-generated row.
+# ใช้สำหรับลบของเก่าทิ้งตอนกด Auto-fill ซ้ำ (replace mode) แต่ไม่แตะ row
+# ที่ user กรอกเอง
+AUTO_EXTRA_MARKER = "[AUTO]"
+
+# Mapping: cost-of-living CSV column → (Thai display name, expense kind label)
+_COL_COMPONENTS = [
+    ("accom_thb",     "ค่าที่พัก"),
+    ("food_thb",      "ค่าอาหาร"),
+    ("transport_thb", "ค่าเดินทาง"),
+    ("utilities_thb", "ค่าน้ำ-ไฟ-เน็ต"),
+]
+
+
+# Education levels that "count" for Thai-domestic auto-fill: extras only
+# kick in for higher-ed (when the student typically moves out / lives near
+# uni). For lower levels in TH, students live with parents → no extras.
+# For NON-TH plans every level contributes (student is abroad regardless).
+_TH_AUTO_FILL_LEVELS = {"bachelor", "master", "doctor"}
+
+
+def _auto_extras_from_edu_plans(edu_plans, col_df):
+    """Build auto-generated extra-expense rows from a child's education plans.
+
+    Filtering:
+      - TH plans: only `bachelor` / `master` / `doctor` contribute (student
+        is assumed to live with parents during lower levels in Thailand).
+      - Non-TH plans: every level contributes (student is abroad regardless).
+
+    City resolution:
+      - Looks up `school_fees` by (level, school_name) to get the school's
+        city, then keys cost-of-living rows by (country, city).
+      - Falls back to the first available city for that country when the
+        school is custom or not found (with a warning).
+
+    Groups remaining plans by (country, city), merges the age range across
+    plans (min start_age → max end_age), then emits 4 recurring rows per
+    (country, city) key (accommodation / food / transport / utilities)
+    using monthly values from cost_of_living.csv × 12.
+
+    Returns (rows, warnings):
+        rows: list of dicts ready to write back to draft state.
+        warnings: list of Thai-language warning strings.
+    """
+    rows = []
+    warnings = []
+
+    if not edu_plans:
+        return rows, warnings
+
+    # Index cost-of-living CSV by (country, city) for exact lookup, and
+    # keep "first city seen" per country as a fallback.
+    cost_by_city: dict = {}
+    first_city_for_country: dict = {}
+    if col_df is not None and not col_df.empty:
+        for r in col_df.to_dict("records"):
+            _c = str(r.get("country", "")).strip()
+            _city = str(r.get("city", "")).strip()
+            if not _c:
+                continue
+            cost_by_city[(_c, _city)] = r
+            if _c not in first_city_for_country:
+                first_city_for_country[_c] = _city
+
+    # Filter + resolve city + group by (country, city)
+    by_country_city: dict = {}
+    for plan in edu_plans:
+        country = (plan.country or "").strip()
+        level = (plan.level or "").strip()
+        if not country:
+            continue
+        # TH rule: skip non-higher-ed in Thailand
+        if country == "TH" and level not in _TH_AUTO_FILL_LEVELS:
+            continue
+
+        # Try resolving the school's city via school_fees lookup
+        city = None
+        if plan.school_name and plan.school_name != CUSTOM_SCHOOL_SENTINEL:
+            try:
+                school_row = lookup_school_fee(level, plan.school_name)
+                if school_row:
+                    _city_raw = str(school_row.get("city", "") or "").strip()
+                    if _city_raw:
+                        city = _city_raw
+            except Exception:
+                city = None
+
+        if not city:
+            # Fallback: first known city for that country
+            city = first_city_for_country.get(country)
+            if city:
+                warnings.append(
+                    f"ℹ️ {edu_level_label(level)} ({country_label(country)}): "
+                    f"ไม่พบเมืองของโรงเรียน — ใช้ค่าครองชีพของ {city} เป็นค่าเริ่มต้น"
+                )
+            else:
+                warnings.append(
+                    f"⚠️ ไม่พบข้อมูลค่าครองชีพของ {country_label(country)} ใน CSV — ข้ามไป"
+                )
+                continue
+
+        # Track which schools contributed to this (country, city) group so
+        # the auto-generated note can list them (e.g. when 2 schools share
+        # the same city → "[AUTO] US - Cambridge, MA - MIT / Harvard").
+        plan_school_name = (plan.school_name or "").strip()
+
+        key = (country, city)
+        if key not in by_country_city:
+            by_country_city[key] = {
+                "start_age": int(plan.start_age),
+                "end_age": int(plan.end_age),
+                "schools": [],
+            }
+        else:
+            by_country_city[key]["start_age"] = min(
+                by_country_city[key]["start_age"], int(plan.start_age)
+            )
+            by_country_city[key]["end_age"] = max(
+                by_country_city[key]["end_age"], int(plan.end_age)
+            )
+        if plan_school_name and plan_school_name != CUSTOM_SCHOOL_SENTINEL:
+            if plan_school_name not in by_country_city[key]["schools"]:
+                by_country_city[key]["schools"].append(plan_school_name)
+
+    if not by_country_city:
+        return rows, warnings
+
+    for (country, city), group in by_country_city.items():
+        csv_row = cost_by_city.get((country, city))
+        if csv_row is None:
+            warnings.append(
+                f"⚠️ ไม่พบข้อมูลค่าครองชีพของ {country_label(country)} เมือง {city} — ข้ามไป"
+            )
+            continue
+
+        country_name = country_label(country)
+        start_age = group["start_age"]
+        end_age = group["end_age"]
+        schools_str = " / ".join(group["schools"]) if group["schools"] else "-"
+
+        for col_key, kind_label in _COL_COMPONENTS:
+            monthly_thb = int(csv_row.get(col_key, 0) or 0)
+            if monthly_thb <= 0:
+                continue
+            annual_thb = float(monthly_thb * 12)
+            rows.append({
+                "name": f"{kind_label} - {country_name} - {city}",
+                "amount": annual_thb,
+                "type": "recurring",
+                "trigger_mode": "by_child_age",
+                "inflation_type": "general",
+                "year": date.today().year,
+                "end_year": date.today().year + 2,
+                "child_age": 10,
+                "start_year": date.today().year,
+                "start_age": int(start_age),
+                "end_age": int(end_age),
+                "note": f"{AUTO_EXTRA_MARKER} {country_name} - {city} - {schools_str}",
+            })
+
+    return rows, warnings
+
+
+# Field names used inside each child.{i}.extra.{j}.* sub-record. Centralised
+# so _delete_extra_row และ _apply_auto_extras_to_draft อ้างถึงชุดเดียวกัน
+_EXTRA_FIELDS = (
+    "name", "amount", "type", "trigger_mode", "inflation_type",
+    "year", "end_year", "child_age", "start_year",
+    "start_age", "end_age", "note",
+)
+
+# Field tuples สำหรับ list อื่น ๆ ที่ใช้กับ _delete_indexed_row
+_EDU_FIELDS = (
+    "level", "country", "school_type", "school_name",
+    "start_age", "end_age", "annual_cost",
+    "show_advanced", "cost_growth_rate", "cost_basis_year", "note",
+)
+_PARENT_FIELDS = (
+    "name", "amount", "type", "year", "end_year", "inflation_type", "note",
+)
+_TOPUP_FIELDS = (
+    "year", "amount", "note",
+)
+
+
+def _delete_indexed_row(
+    draft,
+    key_prefix: str,
+    fields,
+    del_idx: int,
+    n_rows: int,
+    count_field: str,
+    extra_widget_keys=None,
+):
+    """Generic shift-and-delete สำหรับ list ที่ index ด้วย key_prefix.{idx}.{field}.
+
+    - shift row k+1 → k สำหรับ k จาก del_idx ถึง n_rows-2 (draft + session_state)
+    - ลบ orphan keys ของแถวสุดท้ายทั้ง draft + session_state
+    - extra_widget_keys(idx) → iterable ของ widget keys เพิ่มเติม (เช่น
+      sb_school_{i}_{j} ที่ใช้ key prefix ต่างจาก draft) — กันค่าตกค้าง
+    - decrement count_field
+    """
+    # Shift values down
+    for k in range(del_idx, n_rows - 1):
+        for f in fields:
+            src_key = f"{key_prefix}.{k+1}.{f}"
+            dst_key = f"{key_prefix}.{k}.{f}"
+            if src_key in draft:
+                draft[dst_key] = draft[src_key]
+
+    # ลบ orphan keys ของแถวสุดท้ายทั้ง draft และ widget state
+    for f in fields:
+        orphan_key = f"{key_prefix}.{n_rows-1}.{f}"
+        if orphan_key in draft:
+            del draft[orphan_key]
+        if orphan_key in st.session_state:
+            del st.session_state[orphan_key]
+
+    # ล้าง widget state ของแถวที่ถูก shift เพื่อให้ widget อ่านค่าใหม่จาก draft
+    for k in range(del_idx, n_rows - 1):
+        for f in fields:
+            wkey = f"{key_prefix}.{k}.{f}"
+            if wkey in st.session_state:
+                del st.session_state[wkey]
+
+    # Extra widget keys (key ที่ prefix ต่างจาก draft เช่น sb_school_{i}_{j})
+    if extra_widget_keys is not None:
+        for ek in extra_widget_keys(n_rows - 1):
+            if ek in st.session_state:
+                del st.session_state[ek]
+        for k in range(del_idx, n_rows - 1):
+            for ek in extra_widget_keys(k):
+                if ek in st.session_state:
+                    del st.session_state[ek]
+
+    draft_set(count_field, n_rows - 1)
+
+
+def _delete_all_rows(
+    draft,
+    key_prefix: str,
+    fields,
+    n_rows: int,
+    count_field: str,
+    extra_widget_keys=None,
+):
+    """ลบทุก row ใน list ที่ index ด้วย key_prefix.{idx}.{field}.
+
+    เคลียร์ทั้ง draft และ session_state ของทุก index ตั้งแต่ 0 ถึง n_rows-1
+    รวมถึง extra widget keys (เช่น sb_school_{i}_{j}) แล้ว reset count_field
+    เป็น 0
+    """
+    for k in range(n_rows):
+        for f in fields:
+            key = f"{key_prefix}.{k}.{f}"
+            if key in draft:
+                del draft[key]
+            if key in st.session_state:
+                del st.session_state[key]
+        if extra_widget_keys is not None:
+            for ek in extra_widget_keys(k):
+                if ek in st.session_state:
+                    del st.session_state[ek]
+
+    draft_set(count_field, 0)
+
+
+def _delete_extra_row(draft, child_idx: int, del_idx: int, n_extra: int, field_n_extra: str):
+    """Remove the extra-expense row at del_idx; shift subsequent rows down by 1.
+
+    ใช้กับปุ่มถังขยะในแต่ละ card เพื่อให้ user ลบรายการกลาง ๆ ได้ ไม่ใช่แค่
+    รายการล่าสุด. ลบทั้ง draft keys และ widget-state keys (ถ้ามี) เพื่อกัน
+    ค่าตกค้างจาก row เดิมปรากฏที่ index ใหม่หลัง rerun
+    """
+    # Shift values: row k+1 → row k, สำหรับ k จาก del_idx ถึง n_extra-2
+    for k in range(del_idx, n_extra - 1):
+        for f in _EXTRA_FIELDS:
+            src_key = f"child.{child_idx}.extra.{k+1}.{f}"
+            dst_key = f"child.{child_idx}.extra.{k}.{f}"
+            if src_key in draft:
+                draft[dst_key] = draft[src_key]
+
+    # ลบ key ของแถวสุดท้าย (orphan หลังจาก shift) ทั้ง draft และ widget state
+    for f in _EXTRA_FIELDS:
+        orphan_key = f"child.{child_idx}.extra.{n_extra-1}.{f}"
+        if orphan_key in draft:
+            del draft[orphan_key]
+        # widget state ก็ใช้ key เดียวกัน — กันค่าตกค้างใน st.session_state
+        if orphan_key in st.session_state:
+            del st.session_state[orphan_key]
+
+    # ค่าใน widget state ของแถวที่ถูก shift ก็ต้องล้างด้วย เพื่อให้ widget
+    # อ่านค่าใหม่จาก draft ตอน rerun (ไม่งั้นจะเห็นค่าของแถวเดิม index นั้น)
+    for k in range(del_idx, n_extra - 1):
+        for f in _EXTRA_FIELDS:
+            wkey = f"child.{child_idx}.extra.{k}.{f}"
+            if wkey in st.session_state:
+                del st.session_state[wkey]
+
+    draft_set(field_n_extra, n_extra - 1)
+
+
+def _apply_auto_extras_to_draft(draft, child_idx: int, field_n_extra: str, new_auto_rows):
+    """Replace mode: keep manual rows, drop existing [AUTO] rows, append new ones.
+
+    Reads the current child.{i}.extra.{j}.* state, filters out rows whose
+    `note` starts with AUTO_EXTRA_MARKER, appends `new_auto_rows`, then writes
+    back to draft state. Caps at MAX_N_EXTRA. Returns the final row count.
+    """
+    current_n = int(draft_get(field_n_extra, 0))
+
+    # Collect manual (non-AUTO) rows by snapshotting all per-field draft values
+    manual_rows = []
+    for j in range(current_n):
+        note_val = str(draft_get(f"child.{child_idx}.extra.{j}.note", "") or "")
+        if note_val.startswith(AUTO_EXTRA_MARKER):
+            continue
+        manual_rows.append({
+            "name": draft_get(f"child.{child_idx}.extra.{j}.name", f"Expense {j+1}"),
+            "amount": float(draft_get(f"child.{child_idx}.extra.{j}.amount", 100000.0)),
+            "type": draft_get(f"child.{child_idx}.extra.{j}.type", "one_time"),
+            "trigger_mode": draft_get(f"child.{child_idx}.extra.{j}.trigger_mode", "by_year"),
+            "inflation_type": draft_get(f"child.{child_idx}.extra.{j}.inflation_type", "general"),
+            "year": draft_get(f"child.{child_idx}.extra.{j}.year", date.today().year),
+            "end_year": draft_get(f"child.{child_idx}.extra.{j}.end_year", date.today().year + 2),
+            "child_age": draft_get(f"child.{child_idx}.extra.{j}.child_age", 10),
+            "start_year": draft_get(f"child.{child_idx}.extra.{j}.start_year", date.today().year),
+            "start_age": draft_get(f"child.{child_idx}.extra.{j}.start_age", 8),
+            "end_age": draft_get(f"child.{child_idx}.extra.{j}.end_age", 12),
+            "note": note_val,
+        })
+
+    # Merge manual + new auto rows, cap at MAX_N_EXTRA
+    merged = manual_rows + new_auto_rows
+    if len(merged) > MAX_N_EXTRA:
+        merged = merged[:MAX_N_EXTRA]
+
+    # Write back to draft state
+    for j, row in enumerate(merged):
+        draft_set(f"child.{child_idx}.extra.{j}.name", row["name"])
+        draft_set(f"child.{child_idx}.extra.{j}.amount", float(row["amount"]))
+        draft_set(f"child.{child_idx}.extra.{j}.type", row["type"])
+        draft_set(f"child.{child_idx}.extra.{j}.trigger_mode", row["trigger_mode"])
+        draft_set(f"child.{child_idx}.extra.{j}.inflation_type", row["inflation_type"])
+        draft_set(f"child.{child_idx}.extra.{j}.year", int(row["year"]))
+        draft_set(f"child.{child_idx}.extra.{j}.end_year", int(row["end_year"]))
+        draft_set(f"child.{child_idx}.extra.{j}.child_age", int(row["child_age"]))
+        draft_set(f"child.{child_idx}.extra.{j}.start_year", int(row["start_year"]))
+        draft_set(f"child.{child_idx}.extra.{j}.start_age", int(row["start_age"]))
+        draft_set(f"child.{child_idx}.extra.{j}.end_age", int(row["end_age"]))
+        draft_set(f"child.{child_idx}.extra.{j}.note", row["note"])
+
+    draft_set(field_n_extra, len(merged))
+    return len(merged)
+
+
+# ============================================================
+# DEFAULT EDUCATION PRESET (one-click standard plan)
+# ============================================================
+# K-12 → Shrewsbury (อินเตอร์ไทย), ปริญญาตรี → MIT, ปริญญาโท → Harvard.
+# ชื่อโรงเรียนต้องตรงกับที่มีใน data/school_fees.csv "เป๊ะ ๆ" — ถ้าไม่ตรง
+# selectbox จะ fallback เป็น "(พิมพ์เอง / custom)" และผู้ใช้จะเห็นชื่อใน
+# ช่อง custom-text แทนที่จะถูกเลือกจาก dropdown โดยตรง
+DEFAULT_EDU_PRESET_PLANS = [
+    ("kindergarten",  "Shrewsbury International School Bangkok"),
+    ("elementary",    "Shrewsbury International School Bangkok"),
+    ("middle_school", "Shrewsbury International School Bangkok"),
+    ("high_school",   "Shrewsbury International School Bangkok"),
+    ("bachelor",      "Massachusetts Institute of Technology (MIT)"),
+    ("master",        "Harvard University"),
+]
+
+
+def _apply_default_edu_preset(draft, child_idx: int, current_n_edu: int, field_n_edu: str):
+    """Wipe this child's education plans and load DEFAULT_EDU_PRESET_PLANS.
+
+    สำหรับแต่ละแถวจะใช้ EDU_DEFAULT_PRESETS เป็นค่าเริ่มต้น (country, age,
+    growth rate, ...) แล้ว overlay ทับด้วยข้อมูลโรงเรียนจริงจาก
+    school_fees.lookup() ถ้ามี (country/school_type/annual_cost/age range).
+    Sync ค่า sb_school_{i}_{j} widget state ด้วยเพื่อให้ selectbox โชว์
+    โรงเรียนที่เลือกหลัง rerun
+    """
+    # Step 1: clear existing rows (รวม widget state ของ sb_school_*)
+    _delete_all_rows(
+        draft,
+        key_prefix=f"child.{child_idx}.edu",
+        fields=_EDU_FIELDS,
+        n_rows=current_n_edu,
+        count_field=field_n_edu,
+        extra_widget_keys=lambda k: (f"sb_school_{child_idx}_{k}",),
+    )
+
+    # Step 2: เขียนแถวใหม่ตามลำดับใน DEFAULT_EDU_PRESET_PLANS
+    for j, (level, school_name) in enumerate(DEFAULT_EDU_PRESET_PLANS):
+        base = EDU_DEFAULT_PRESETS.get(level, EDU_DEFAULT_PRESETS["other"])
+
+        country = base["country"]
+        school_type = base["school_type"]
+        annual_cost = float(base["annual_cost"])
+        start_age = int(base["start_age"])
+        end_age = int(base["end_age"])
+
+        row = lookup_school_fee(level, school_name)
+        if row is not None:
+            _c = row.get("country")
+            if _c:
+                country = str(_c)
+            _st = row.get("school_type")
+            if _st:
+                school_type = str(_st)
+            _ac = row.get("annual_cost")
+            try:
+                if _ac is not None and not pd.isna(_ac):
+                    annual_cost = float(_ac)
+            except (TypeError, ValueError):
+                pass
+            _amin = row.get("age_min")
+            _amax = row.get("age_max")
+            try:
+                if _amin is not None and not pd.isna(_amin):
+                    start_age = int(_amin)
+                if _amax is not None and not pd.isna(_amax):
+                    end_age = int(_amax)
+            except (TypeError, ValueError):
+                pass
+
+        draft_set(f"child.{child_idx}.edu.{j}.level", level)
+        draft_set(f"child.{child_idx}.edu.{j}.country", country)
+        draft_set(f"child.{child_idx}.edu.{j}.school_type", school_type)
+        draft_set(f"child.{child_idx}.edu.{j}.school_name", school_name)
+        draft_set(f"child.{child_idx}.edu.{j}.start_age", int(start_age))
+        draft_set(f"child.{child_idx}.edu.{j}.end_age", int(end_age))
+        draft_set(f"child.{child_idx}.edu.{j}.annual_cost", float(annual_cost))
+        draft_set(f"child.{child_idx}.edu.{j}.show_advanced", False)
+        draft_set(f"child.{child_idx}.edu.{j}.cost_growth_rate", float(base["cost_growth_rate"]))
+        draft_set(f"child.{child_idx}.edu.{j}.cost_basis_year", int(base["cost_basis_year"]))
+        draft_set(f"child.{child_idx}.edu.{j}.note", base.get("note", ""))
+
+        # Sync selectbox widget state ให้โชว์โรงเรียนที่เลือกหลัง rerun
+        st.session_state[f"sb_school_{child_idx}_{j}"] = school_name
+
+    draft_set(field_n_edu, len(DEFAULT_EDU_PRESET_PLANS))
+    return len(DEFAULT_EDU_PRESET_PLANS)
+
+
+# ============================================================
+# CHILD-ROW DELETION (snapshot + wipe + restore at new index)
+# ============================================================
+# Top-level (non-list) fields stored per child. Nested edu/extra rows use
+# _EDU_FIELDS and _EXTRA_FIELDS keyed under child.{i}.edu.{j}.* / .extra.{j}.*
+_CHILD_TOP_FIELDS = ("name", "gender", "birth_date", "n_edu", "n_extra")
+
+
+def _snapshot_child(draft, child_idx: int) -> dict:
+    """Capture ALL state for one child (top fields + nested edu + nested extra).
+
+    เก็บ sb_school_{i}_{j} widget state ไว้ด้วยใต้ key "__sb_school" ของ
+    แต่ละ edu row เพื่อให้ selectbox โชว์โรงเรียนเดิมหลัง shift index
+    """
+    snap = {"top": {}, "edu": [], "extra": []}
+
+    for f in _CHILD_TOP_FIELDS:
+        key = f"child.{child_idx}.{f}"
+        if key in draft:
+            snap["top"][f] = draft[key]
+
+    n_edu = int(draft.get(f"child.{child_idx}.n_edu", 0) or 0)
+    for j in range(n_edu):
+        row = {}
+        for f in _EDU_FIELDS:
+            key = f"child.{child_idx}.edu.{j}.{f}"
+            if key in draft:
+                row[f] = draft[key]
+        sb_key = f"sb_school_{child_idx}_{j}"
+        if sb_key in st.session_state:
+            row["__sb_school"] = st.session_state[sb_key]
+        snap["edu"].append(row)
+
+    n_extra = int(draft.get(f"child.{child_idx}.n_extra", 0) or 0)
+    for j in range(n_extra):
+        row = {}
+        for f in _EXTRA_FIELDS:
+            key = f"child.{child_idx}.extra.{j}.{f}"
+            if key in draft:
+                row[f] = draft[key]
+        snap["extra"].append(row)
+
+    return snap
+
+
+def _wipe_child(draft, child_idx: int):
+    """Delete every draft + widget-state key belonging to one child slot.
+
+    ใช้ MAX_N_EDU / MAX_N_EXTRA เป็น upper bound เผื่อมี orphan key
+    หลงเหลือจาก list ขนาดเดิมที่ใหญ่กว่า n_edu/n_extra ปัจจุบัน
+    """
+    for f in _CHILD_TOP_FIELDS:
+        key = f"child.{child_idx}.{f}"
+        if key in draft:
+            del draft[key]
+        if key in st.session_state:
+            del st.session_state[key]
+
+    disp_key = f"child_name_display_{child_idx}"
+    if disp_key in st.session_state:
+        del st.session_state[disp_key]
+
+    for j in range(MAX_N_EDU):
+        for f in _EDU_FIELDS:
+            key = f"child.{child_idx}.edu.{j}.{f}"
+            if key in draft:
+                del draft[key]
+            if key in st.session_state:
+                del st.session_state[key]
+        sb_key = f"sb_school_{child_idx}_{j}"
+        if sb_key in st.session_state:
+            del st.session_state[sb_key]
+
+    for j in range(MAX_N_EXTRA):
+        for f in _EXTRA_FIELDS:
+            key = f"child.{child_idx}.extra.{j}.{f}"
+            if key in draft:
+                del draft[key]
+            if key in st.session_state:
+                del st.session_state[key]
+
+
+def _restore_child(draft, child_idx: int, snap: dict):
+    """Write a snapshot back at the given (possibly different) child index."""
+    for f, v in snap["top"].items():
+        draft_set(f"child.{child_idx}.{f}", v)
+
+    for j, row in enumerate(snap["edu"]):
+        for f in _EDU_FIELDS:
+            if f in row:
+                draft_set(f"child.{child_idx}.edu.{j}.{f}", row[f])
+        sb_val = row.get("__sb_school")
+        if sb_val is not None:
+            st.session_state[f"sb_school_{child_idx}_{j}"] = sb_val
+
+    for j, row in enumerate(snap["extra"]):
+        for f in _EXTRA_FIELDS:
+            if f in row:
+                draft_set(f"child.{child_idx}.extra.{j}.{f}", row[f])
+
+
+def _delete_child_row(draft, del_idx: int, n_children: int):
+    """Remove child at del_idx; shift later children up by 1.
+
+    ใช้วิธี snapshot-wipe-restore เพราะแต่ละลูกมี nested list (edu/extra)
+    ขนาดต่างกัน — generic shift-and-delete ที่ใช้กับ flat list จะคำนวณ
+    boundary ผิด
+    """
+    if n_children <= 0:
+        return
+
+    surviving = []
+    for k in range(n_children):
+        if k == del_idx:
+            continue
+        surviving.append(_snapshot_child(draft, k))
+
+    for k in range(n_children):
+        _wipe_child(draft, k)
+
+    for new_idx, snap in enumerate(surviving):
+        _restore_child(draft, new_idx, snap)
+
+    draft_set("n_children", len(surviving))
 
 
 # ============================================================
@@ -133,19 +740,9 @@ def render_section_children(draft):
         if st.button(S("p1", "btn_fee_reference"), key="btn_fee_reference", width="stretch"):
             switch_page_with_persist("pages/04_School_Fees_Reference.py")
 
-    _c_label, _c_add, _c_rem, _c_space = st.columns([1, 1, 1, 2])
+    _c_label, _c_space = st.columns([1, 4])
     with _c_label:
         st.metric(S("p1", "metric_n_children"), n_children)
-    with _c_add:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button(S("p1", "btn_add_child"), key="btn_add_child", width="stretch", disabled=n_children >= 10):
-            draft_set("n_children", n_children + 1)
-            st.rerun()
-    with _c_rem:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button(S("p1", "btn_rem_child"), key="btn_rem_child", width="stretch", disabled=n_children <= 0):
-            draft_set("n_children", n_children - 1)
-            st.rerun()
 
     children = []
 
@@ -165,6 +762,22 @@ def render_section_children(draft):
         child_name_preview = draft_get(field_name, f"Child {i+1}")
 
         with st.expander(S("p1", "child_expander", n=i+1, name=child_name_preview), expanded=(i == 0)):
+            # ── Per-child delete (กลับมาอยู่ใน expander, ชิดซ้ายสุดของ box) ──
+            # disabled เมื่อเหลือลูกคนเดียว (MIN_N_CHILDREN=1) — น้อยกว่านี้
+            # ไม่มีอะไรให้ simulate
+            _cd_del, _cd_space = st.columns([1, 5])
+            with _cd_del:
+                if st.button(
+                    "🗑 ลบข้อมูลลูก",
+                    key=f"btn_del_child_{i}",
+                    width="stretch",
+                    disabled=n_children <= MIN_N_CHILDREN,
+                    help="ลบข้อมูลลูกคนนี้ทั้งหมด (รวมแผนการศึกษาและรายจ่ายเพิ่มเติม) "
+                         "— ลูกคนถัดไปจะเลื่อนขึ้นมาแทน",
+                ):
+                    _delete_child_row(draft, i, n_children)
+                    st.rerun()
+
             tab_basic, tab_edu, tab_extra = st.tabs([
                 S("p1", "tab_basic"),
                 S("p1", "tab_edu"),
@@ -178,9 +791,6 @@ def render_section_children(draft):
                 st.caption(S("p1", "basic_caption"))
 
                 c1, c2, c3 = st.columns([1.5, 1, 1])
-
-                # with c1:
-                #     p_text_input(S("p1", "label_child_name"), field=field_name, default=f"Child {i+1}")
 
                 with c1:
                     # Auto-assigned child name (read-only)
@@ -218,18 +828,42 @@ def render_section_children(draft):
                 st.caption(S("p1", "edu_caption"))
 
                 n_edu = int(draft_get(field_n_edu, 5))
-                _e_label, _e_add, _e_rem, _e_space = st.columns([2, 1, 1, 3.5])
+                _e_label, _e_default, _e_clear, _e_space = st.columns([1.3, 2, 1.7, 2.5])
                 with _e_label:
                     st.metric(S("p1", "metric_n_edu"), n_edu)
-                with _e_add:
-                    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-                    if st.button("➕", key=f"btn_add_edu_{i}", width="stretch", disabled=n_edu >= 20):
-                        draft_set(field_n_edu, n_edu + 1)
+                with _e_default:
+                    _btn_spacer()
+                    if st.button(
+                        "📋 ใช้ค่าเริ่มต้น",
+                        key=f"btn_default_edu_{i}",
+                        width="stretch",
+                        help="โหลดแผนการศึกษาเริ่มต้น: อนุบาล–มัธยมปลาย Shrewsbury, "
+                             "ปริญญาตรี Top US, ปริญญาโท Top US MBA "
+                             "(จะลบแผนเดิมทั้งหมดก่อน)",
+                    ):
+                        _n_new = _apply_default_edu_preset(draft, i, n_edu, field_n_edu)
+                        st.success(
+                            f"✅ โหลดแผนการศึกษาเริ่มต้น {_n_new} รายการแล้ว "
+                            "— ปรับแก้ในแต่ละการ์ดได้"
+                        )
                         st.rerun()
-                with _e_rem:
-                    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-                    if st.button("🗑", key=f"btn_rem_edu_{i}", width="stretch", disabled=n_edu <= 0):
-                        draft_set(field_n_edu, n_edu - 1)
+                with _e_clear:
+                    _btn_spacer()
+                    if st.button(
+                        "🗑 ลบทั้งหมด",
+                        key=f"btn_clear_edu_{i}",
+                        width="stretch",
+                        disabled=n_edu <= 0,
+                        help="ลบแผนการศึกษาทุกรายการของลูกคนนี้",
+                    ):
+                        _delete_all_rows(
+                            draft,
+                            key_prefix=f"child.{i}.edu",
+                            fields=_EDU_FIELDS,
+                            n_rows=n_edu,
+                            count_field=field_n_edu,
+                            extra_widget_keys=lambda k: (f"sb_school_{i}_{k}",),
+                        )
                         st.rerun()
 
                 edu_plans = []
@@ -270,10 +904,27 @@ def render_section_children(draft):
                             _edu_level_label = EDU_LEVEL_LABELS.get(draft_get(f_level, default_level), default_level)
                             st.markdown(f"**{S('p1', 'edu_plan_header', n=j+1, level=_edu_level_label)}**")
                         with top2:
-                            st.empty()
+                            if st.button(
+                                "🗑 ลบ",
+                                key=f"btn_del_edu_{i}_{j}",
+                                width="stretch",
+                                help="ลบแผนการศึกษานี้ (แผนด้านล่างจะเลื่อนขึ้นมาแทน)",
+                            ):
+                                _delete_indexed_row(
+                                    draft,
+                                    key_prefix=f"child.{i}.edu",
+                                    fields=_EDU_FIELDS,
+                                    del_idx=j,
+                                    n_rows=n_edu,
+                                    count_field=field_n_edu,
+                                    extra_widget_keys=lambda k: (f"sb_school_{i}_{k}",),
+                                )
+                                st.rerun()
 
                         # ── Row 1: Primary fields (always visible) ──
-                        e1, e2, e3, e4 = st.columns(4)
+                        # min+max age รวมกัน = 1 unit (เท่า min age เดิม),
+                        # school name = 2 units (สองเท่าของเดิม)
+                        e1, e2, e3, e4 = st.columns([1, 0.5, 0.5, 2])
 
                         with e1:
                             p_selectbox(
@@ -376,8 +1027,26 @@ def render_section_children(draft):
                         with s4:
                             p_text_input(S("p1", "label_note"), field=f_note, default=default_preset["note"])
 
-                        # ── Slim expander: growth rate override ──
-                        with st.expander(S("p1", "edu_advanced_expander"), expanded=False):
+                        # ── Toggle: override education inflation per-plan ──
+                        # OFF (default) → ใช้ค่า education_inflation จากหัวข้อ "สมมติฐาน"
+                        # ON            → ผู้ใช้ตั้งอัตราเงินเฟ้อ + ปีฐานเฉพาะแผนนี้
+                        # draft state ของ override (f_cost_growth / f_cost_basis)
+                        # ยังเก็บไว้อยู่แม้ toggle ถูกปิด — เปิดใหม่จะได้ค่าเดิมกลับมา
+                        _override_toggle_key = f"toggle_growth_override_{i}_{j}"
+                        if _override_toggle_key not in st.session_state:
+                            st.session_state[_override_toggle_key] = bool(
+                                draft_get(f_show_advanced, False)
+                            )
+
+                        _use_override = st.toggle(
+                            "ปรับอัตราเงินเฟ้อค่าเล่าเรียนและปีฐานเอง",
+                            key=_override_toggle_key,
+                            help="ปิด: ใช้อัตราเงินเฟ้อค่าเล่าเรียนจากหัวข้อ ‘สมมติฐาน’ ด้านล่าง | "
+                                 "เปิด: กำหนดอัตราเงินเฟ้อและปีฐานเฉพาะแผนนี้",
+                        )
+                        draft_set(f_show_advanced, _use_override)
+
+                        if _use_override:
                             e9, e10 = st.columns(2)
 
                             with e9:
@@ -386,7 +1055,7 @@ def render_section_children(draft):
                                     field=f_cost_growth,
                                     default_decimal=float(default_preset["cost_growth_rate"]),
                                     min_value=0.0,
-                                    max_value=30.0,
+                                    max_value=RATE_MAX_PCT,
                                     step=0.5,
                                     format="%.1f",
                                 )
@@ -396,14 +1065,20 @@ def render_section_children(draft):
                                     p_number_input(
                                         S("p1", "label_cost_basis_year"),
                                         field=f_cost_basis,
-                                        default=2026,
-                                        min_value=2026,
+                                        default=date.today().year,
+                                        min_value=date.today().year,
                                         max_value=2100,
                                         step=1,
                                         format="%d",
                                         cast=int,
                                     )
                                 )
+                        else:
+                            # None ส่งต่อ EducationPlan → simulation_core fallback
+                            # ไปใช้ assumptions.education_inflation_rate + base year
+                            # ของ assumption section (ดู simulation_core.py:649-658)
+                            cost_growth_rate = None
+                            cost_basis_year = None
 
                         edu_plans.append(
                             EducationPlan(
@@ -420,6 +1095,16 @@ def render_section_children(draft):
                             )
                         )
 
+                # Add button ที่ท้ายลิสต์ (ใช้แทนปุ่ม ➕ ที่เคยอยู่ header)
+                if st.button(
+                    "➕ เพิ่มแผนการศึกษา",
+                    key=f"btn_add_edu_bottom_{i}",
+                    width="stretch",
+                    disabled=n_edu >= MAX_N_EDU,
+                ):
+                    draft_set(field_n_edu, n_edu + 1)
+                    st.rerun()
+
             # ----------------------------------------------------
             # TAB 3: CHILD EXTRA EXPENSES
             # ----------------------------------------------------
@@ -427,18 +1112,64 @@ def render_section_children(draft):
                 st.caption(S("p1", "extra_caption"))
 
                 n_extra = int(draft_get(field_n_extra, 0))
-                _x_label, _x_add, _x_rem, _x_space = st.columns([1, 1, 1, 2])
+
+                # ปุ่ม Auto-fill เปิดใช้ได้ก็ต่อเมื่อมี edu plan ที่ระบุประเทศแล้ว
+                _has_country_in_edu = any(
+                    (getattr(p, "country", None) or "").strip()
+                    for p in edu_plans
+                )
+
+                _x_label, _x_auto, _x_clear, _x_space = st.columns([1, 1.5, 1.5, 2])
                 with _x_label:
                     st.metric(S("p1", "metric_n_extra"), n_extra)
-                with _x_add:
-                    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-                    if st.button("➕ เพิ่มรายการ", key=f"btn_add_extra_{i}", width="stretch", disabled=n_extra >= 30):
-                        draft_set(field_n_extra, n_extra + 1)
-                        st.rerun()
-                with _x_rem:
-                    st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-                    if st.button("🗑 ลบรายการล่าสุด", key=f"btn_rem_extra_{i}", width="stretch", disabled=n_extra <= 0):
-                        draft_set(field_n_extra, n_extra - 1)
+                with _x_auto:
+                    _btn_spacer()
+                    if st.button(
+                        "🪄 Auto-fill จาก Education Plan",
+                        key=f"btn_auto_extra_{i}",
+                        width="stretch",
+                        disabled=not _has_country_in_edu,
+                        help="สร้างรายการค่าครองชีพ (ที่พัก/อาหาร/เดินทาง/น้ำ-ไฟ) อัตโนมัติ "
+                             "ตามประเทศและช่วงอายุของแผนการศึกษา — แก้ไขได้ภายหลัง "
+                             "(รายการที่กรอกเองจะไม่ถูกแตะ)",
+                    ):
+                        _col_df = load_cost_of_living()
+                        _auto_rows, _auto_warnings = _auto_extras_from_edu_plans(edu_plans, _col_df)
+                        if not _auto_rows:
+                            # Toast survives st.rerun(); inline st.warning() does not.
+                            st.toast(
+                                "ไม่สามารถสร้างรายการอัตโนมัติได้ — "
+                                "ตรวจสอบว่าแผนการศึกษาระบุประเทศที่มีในฐานข้อมูลค่าครองชีพ",
+                                icon="⚠️",
+                            )
+                        else:
+                            _n_final = _apply_auto_extras_to_draft(
+                                draft, i, field_n_extra, _auto_rows
+                            )
+                            st.toast(
+                                f"สร้างรายการอัตโนมัติ {len(_auto_rows)} รายการ "
+                                f"(รวม {_n_final} รายการ) — ปรับแก้ได้ในการ์ดด้านล่าง",
+                                icon="✅",
+                            )
+                            for _w in _auto_warnings:
+                                st.toast(_w, icon="ℹ️")
+                            st.rerun()
+                with _x_clear:
+                    _btn_spacer()
+                    if st.button(
+                        "🗑 ลบทั้งหมด",
+                        key=f"btn_clear_extra_{i}",
+                        width="stretch",
+                        disabled=n_extra <= 0,
+                        help="ลบรายจ่ายเพิ่มเติมทุกรายการของลูกคนนี้",
+                    ):
+                        _delete_all_rows(
+                            draft,
+                            key_prefix=f"child.{i}.extra",
+                            fields=_EXTRA_FIELDS,
+                            n_rows=n_extra,
+                            count_field=field_n_extra,
+                        )
                         st.rerun()
 
                 extra_expenses = []
@@ -471,7 +1202,18 @@ def render_section_children(draft):
                     draft.setdefault(f_note, "")
 
                     with st.container(border=True):
-                        st.markdown(f"**{S('p1', 'extra_card_header', n=j+1)}**")
+                        _hdr_col, _del_col = st.columns([5, 1])
+                        with _hdr_col:
+                            st.markdown(f"**{S('p1', 'extra_card_header', n=j+1)}**")
+                        with _del_col:
+                            if st.button(
+                                "🗑 ลบ",
+                                key=f"btn_del_extra_{i}_{j}",
+                                width="stretch",
+                                help="ลบรายการนี้ออก (รายการที่อยู่ด้านล่างจะเลื่อนขึ้นมาแทน)",
+                            ):
+                                _delete_extra_row(draft, i, j, n_extra, field_n_extra)
+                                st.rerun()
 
                         x1, x2, x3 = st.columns(3)
                         with x1:
@@ -526,8 +1268,8 @@ def render_section_children(draft):
                                         SC("year"),
                                         field=f_year,
                                         default=date.today().year,
-                                        min_value=2020,
-                                        max_value=2100,
+                                        min_value=YEAR_MIN_DEFAULT,
+                                        max_value=YEAR_MAX_DEFAULT,
                                         step=1,
                                         format="%d",
                                         cast=int,
@@ -556,8 +1298,8 @@ def render_section_children(draft):
                                             SC("start_year"),
                                             field=f_start_year,
                                             default=date.today().year,
-                                            min_value=2020,
-                                            max_value=2100,
+                                            min_value=YEAR_MIN_DEFAULT,
+                                            max_value=YEAR_MAX_DEFAULT,
                                             step=1,
                                             format="%d",
                                             cast=int,
@@ -570,8 +1312,8 @@ def render_section_children(draft):
                                             SC("end_year"),
                                             field=f_end_year,
                                             default=date.today().year + 2,
-                                            min_value=2020,
-                                            max_value=2100,
+                                            min_value=YEAR_MIN_DEFAULT,
+                                            max_value=YEAR_MAX_DEFAULT,
                                             step=1,
                                             format="%d",
                                             cast=int,
@@ -627,6 +1369,16 @@ def render_section_children(draft):
                             )
                         )
 
+                # Add button ที่ท้ายลิสต์ (ใช้แทนปุ่ม ➕ ที่เคยอยู่ header)
+                if st.button(
+                    "➕ เพิ่มรายการ",
+                    key=f"btn_add_extra_bottom_{i}",
+                    width="stretch",
+                    disabled=n_extra >= MAX_N_EXTRA,
+                ):
+                    draft_set(field_n_extra, n_extra + 1)
+                    st.rerun()
+
             children.append(
                 Child(
                     name=draft_get(field_name),
@@ -637,6 +1389,16 @@ def render_section_children(draft):
                 )
             )
 
+    # Add button ที่ท้ายลิสต์ (ใช้แทนปุ่ม ➕ ที่เคยอยู่ header)
+    if st.button(
+        "➕ เพิ่มข้อมูลลูก",
+        key="btn_add_child_bottom",
+        width="stretch",
+        disabled=n_children >= MAX_N_CHILDREN,
+    ):
+        draft_set("n_children", n_children + 1)
+        st.rerun()
+
     total_edu_plans = sum(len(c.education_plan) for c in children)
     total_child_extra = sum(len(c.extra_expenses) for c in children)
     return children, n_children, total_edu_plans, total_child_extra
@@ -645,25 +1407,21 @@ def render_section_children(draft):
 # ============================================================
 # SECTION 2: PARENT EXPENSES
 # ============================================================
-def render_section_parent_expenses(draft):
-    """Render the Parent Expenses section. Returns (parent_expenses, n_parent_expenses)."""
+def render_section_parent_expenses(draft, assumptions_start_year: int = None):
+    """Render the Parent Expenses section. Returns (parent_expenses, n_parent_expenses).
+
+    `assumptions_start_year` ถ้าส่งมาจะใช้เป็น min_value ของปีรายจ่ายผู้ปกครอง
+    (ตามที่ user ต้องการ #17). ถ้าไม่ส่งมาจะ fallback เป็นปีปัจจุบัน."""
     st.header(S("p1", "sec2_header"))
     st.caption(S("p1", "sec2_caption"))
 
+    # ใช้ assumptions.start_year ถ้ามี — กันคนใส่ปีเก่ากว่าจุดเริ่ม simulate
+    year_min = int(assumptions_start_year) if assumptions_start_year else YEAR_MIN_DEFAULT
+
     n_parent_expenses = int(draft_get("n_parent_expenses", 0))
-    _pe_label, _pe_add, _pe_rem, _pe_space = st.columns([1, 1, 1, 2])
+    _pe_label, _pe_space = st.columns([1, 4])
     with _pe_label:
         st.metric(S("p1", "metric_n_parent"), n_parent_expenses)
-    with _pe_add:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button(S("p1", "btn_add_parent"), key="btn_add_pe", width="stretch", disabled=n_parent_expenses >= 30):
-            draft_set("n_parent_expenses", n_parent_expenses + 1)
-            st.rerun()
-    with _pe_rem:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button(S("p1", "btn_rem_child"), key="btn_rem_pe", width="stretch", disabled=n_parent_expenses <= 0):
-            draft_set("n_parent_expenses", n_parent_expenses - 1)
-            st.rerun()
 
     parent_expenses = []
 
@@ -685,7 +1443,25 @@ def render_section_parent_expenses(draft):
         draft.setdefault(f_note, "")
 
         with st.container(border=True):
-            st.markdown(f"**{S('p1', 'parent_card_header', n=i+1)}**")
+            _pe_hdr, _pe_del = st.columns([5, 1])
+            with _pe_hdr:
+                st.markdown(f"**{S('p1', 'parent_card_header', n=i+1)}**")
+            with _pe_del:
+                if st.button(
+                    "🗑 ลบ",
+                    key=f"btn_del_pe_{i}",
+                    width="stretch",
+                    help="ลบรายการนี้ (รายการด้านล่างจะเลื่อนขึ้นมาแทน)",
+                ):
+                    _delete_indexed_row(
+                        draft,
+                        key_prefix="parent",
+                        fields=_PARENT_FIELDS,
+                        del_idx=i,
+                        n_rows=n_parent_expenses,
+                        count_field="n_parent_expenses",
+                    )
+                    st.rerun()
 
             p1, p2, p3 = st.columns(3)
 
@@ -722,8 +1498,8 @@ def render_section_parent_expenses(draft):
                         SC("year"),
                         field=f_year,
                         default=date.today().year,
-                        min_value=1900,
-                        max_value=2200,
+                        min_value=year_min,
+                        max_value=YEAR_MAX_DEFAULT,
                         step=1,
                         format="%d",
                         cast=int,
@@ -749,8 +1525,8 @@ def render_section_parent_expenses(draft):
                         SC("start_year"),
                         field=f_year,
                         default=date.today().year,
-                        min_value=1900,
-                        max_value=2200,
+                        min_value=year_min,
+                        max_value=YEAR_MAX_DEFAULT,
                         step=1,
                         format="%d",
                         cast=int,
@@ -761,9 +1537,9 @@ def render_section_parent_expenses(draft):
                         p_number_input(
                             SC("end_year"),
                             field=f_end_year,
-                            default=2030,
-                            min_value=1900,
-                            max_value=2200,
+                            default=date.today().year + 2,
+                            min_value=year_min,
+                            max_value=YEAR_MAX_DEFAULT,
                             step=1,
                             format="%d",
                             cast=int,
@@ -793,6 +1569,16 @@ def render_section_parent_expenses(draft):
                     note=_none_if_blank(draft_get(f_note)),
                 )
             )
+
+    # Add button ที่ท้ายลิสต์ (ใช้แทนปุ่ม ➕/➖ ที่เคยอยู่ header)
+    if st.button(
+        "➕ เพิ่มค่าใช้จ่ายครอบครัว",
+        key="btn_add_pe_bottom",
+        width="stretch",
+        disabled=n_parent_expenses >= MAX_N_PARENT_EXPENSES,
+    ):
+        draft_set("n_parent_expenses", n_parent_expenses + 1)
+        st.rerun()
 
     return parent_expenses, n_parent_expenses
 
@@ -840,19 +1626,9 @@ def render_section_saving_plan(draft):
     saving_start_year = int(draft_get("saving_start_year"))
 
     n_topups = int(draft_get("n_topups", 0))
-    _tp_label, _tp_add, _tp_rem, _tp_space = st.columns([1, 1, 1, 2])
+    _tp_label, _tp_space = st.columns([1, 4])
     with _tp_label:
         st.metric(S("p1", "metric_n_topups"), n_topups)
-    with _tp_add:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button(S("p1", "btn_add_topup"), key="btn_add_topup", width="stretch", disabled=n_topups >= 20):
-            draft_set("n_topups", n_topups + 1)
-            st.rerun()
-    with _tp_rem:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button(S("p1", "btn_rem_child"), key="btn_rem_topup", width="stretch", disabled=n_topups <= 0):
-            draft_set("n_topups", n_topups - 1)
-            st.rerun()
 
     annual_topups = []
     for i in range(n_topups):
@@ -865,7 +1641,25 @@ def render_section_saving_plan(draft):
         draft.setdefault(f_note, "")
 
         with st.container(border=True):
-            st.markdown(f"**{S('p1', 'topup_card_header', n=i+1)}**")
+            _tp_hdr, _tp_del = st.columns([5, 1])
+            with _tp_hdr:
+                st.markdown(f"**{S('p1', 'topup_card_header', n=i+1)}**")
+            with _tp_del:
+                if st.button(
+                    "🗑 ลบ",
+                    key=f"btn_del_topup_{i}",
+                    width="stretch",
+                    help="ลบรายการนี้ (รายการด้านล่างจะเลื่อนขึ้นมาแทน)",
+                ):
+                    _delete_indexed_row(
+                        draft,
+                        key_prefix="topup",
+                        fields=_TOPUP_FIELDS,
+                        del_idx=i,
+                        n_rows=n_topups,
+                        count_field="n_topups",
+                    )
+                    st.rerun()
 
             t1, t2, t3 = st.columns(3)
 
@@ -874,8 +1668,8 @@ def render_section_saving_plan(draft):
                     SC("year"),
                     field=f_year,
                     default=date.today().year,
-                    min_value=1900,
-                    max_value=2200,
+                    min_value=YEAR_MIN_DEFAULT,
+                    max_value=YEAR_MAX_DEFAULT,
                     step=1,
                     format="%d",
                     cast=int,
@@ -903,6 +1697,16 @@ def render_section_saving_plan(draft):
                 )
             )
 
+    # Add button ที่ท้ายลิสต์ (ใช้แทนปุ่ม ➕/➖ ที่เคยอยู่ header)
+    if st.button(
+        "➕ เพิ่มเงินก้อนพิเศษ",
+        key="btn_add_topup_bottom",
+        width="stretch",
+        disabled=n_topups >= MAX_N_TOPUPS,
+    ):
+        draft_set("n_topups", n_topups + 1)
+        st.rerun()
+
     saving_plan = SavingPlan(
         initial_savings=initial_savings,
         monthly_contribution=monthly_contribution,
@@ -919,7 +1723,7 @@ def render_section_assumptions():
     """Render the Assumptions section. Returns the Assumptions dataclass."""
     st.header(S("p1", "sec4_header"))
 
-    basic_a0, basic_a1, basic_a2 = st.columns(3)
+    basic_a0, basic_a1 = st.columns(2)
 
     with basic_a0:
         p_percent_input(
@@ -927,7 +1731,7 @@ def render_section_assumptions():
             field="general_inflation_rate",
             default_decimal=0.03,
             min_value=0.0,
-            max_value=30.0,
+            max_value=RATE_MAX_PCT,
             step=0.5,
             format="%.1f",
             help=S("p1", "label_general_infl_help"),
@@ -939,23 +1743,15 @@ def render_section_assumptions():
             field="education_inflation_rate",
             default_decimal=0.05,
             min_value=0.0,
-            max_value=30.0,
+            max_value=RATE_MAX_PCT,
             step=0.5,
             format="%.1f",
             help=S("p1", "label_edu_infl_help"),
         )
 
-    with basic_a2:
-        p_percent_input(
-            S("p1", "label_invest_return"),
-            field="investment_return_rate",
-            default_decimal=0.06,
-            min_value=0.0,
-            max_value=50.0,
-            step=0.5,
-            format="%.1f",
-            help=S("p1", "label_invest_return_help"),
-        )
+    # Investment return input hidden — forced to 0% by default.
+    # Users can override via Page 2 re-simulation expander if needed.
+    draft_set("investment_return_rate", 0.0)
 
     with st.expander(S("p1", "advanced_assump"), expanded=False):
         a1, a2 = st.columns(2)
@@ -1046,6 +1842,8 @@ def render_section_review_and_run(
     _ri = S("p1", "review_col_item")
     _rv = S("p1", "review_col_value")
     with st.expander(S("p1", "review_expander"), expanded=False):
+        # ── Overall summary table ──
+        st.markdown("**ภาพรวม**")
         review_df = pd.DataFrame([
             {_ri: S("p1", "review_children"),        _rv: f"{int(n_children):,}"},
             {_ri: S("p1", "review_edu_plans"),       _rv: f"{int(total_edu_plans):,}"},
@@ -1059,6 +1857,64 @@ def render_section_review_and_run(
             {_ri: S("p1", "review_invest_return"),   _rv: f"{float(draft_get('investment_return_rate'))*100:.1f}%"},
         ])
         st.dataframe(review_df, width="stretch", hide_index=True)
+
+        # ── Per-child breakdown ──
+        if children:
+            st.markdown("**รายละเอียดรายลูก**")
+            per_child_rows = []
+            for idx, c in enumerate(children, start=1):
+                # อ้างถึง EducationPlan / ExtraExpense จาก simulation_core
+                edu_summary = ", ".join(
+                    f"{edu_level_label(p.level)} ({p.start_age}-{p.end_age})"
+                    for p in c.education_plan
+                ) or "—"
+                total_edu_cost_today = sum(float(p.annual_cost) for p in c.education_plan)
+                per_child_rows.append({
+                    "ลูก": c.name,
+                    "วันเกิด": c.birth_date,
+                    "เพศ": gender_label(c.gender),
+                    "จำนวนระดับการศึกษา": f"{len(c.education_plan):,}",
+                    "ช่วงการศึกษา": edu_summary,
+                    "รวมค่าเล่าเรียน/ปี (ปีฐาน)": f"{total_edu_cost_today:,.0f}",
+                    "รายจ่ายเพิ่มเติม": f"{len(c.extra_expenses):,}",
+                })
+            child_df = pd.DataFrame(per_child_rows)
+            # cast object columns to str (Arrow consistency, เหมือนตอน footer)
+            for _col in child_df.columns:
+                if child_df[_col].dtype == object:
+                    child_df[_col] = child_df[_col].astype(str)
+            st.dataframe(child_df, width="stretch", hide_index=True)
+
+        # ── Per-child education plan detail ──
+        if children and any(c.education_plan for c in children):
+            st.markdown("**แผนการศึกษารายลูก**")
+            edu_rows = []
+            for c in children:
+                for plan in c.education_plan:
+                    edu_rows.append({
+                        "ลูก": c.name,
+                        "ระดับ": edu_level_label(plan.level),
+                        "ประเทศ": plan.country or "—",
+                        "ประเภท": school_type_label(plan.school_type) if plan.school_type else "—",
+                        "โรงเรียน": plan.school_name or "—",
+                        "อายุเริ่ม-จบ": f"{plan.start_age}-{plan.end_age}",
+                        "ค่าเล่าเรียน/ปี (ปีฐาน)": f"{float(plan.annual_cost):,.0f}",
+                        "ปีฐาน": (
+                            f"{int(plan.cost_basis_year)}"
+                            if plan.cost_basis_year is not None
+                            else "ใช้ค่าจากสมมติฐาน"
+                        ),
+                        "อัตราเพิ่ม/ปี": (
+                            f"{float(plan.cost_growth_rate)*100:.1f}%"
+                            if plan.cost_growth_rate is not None
+                            else "ใช้ค่าจากสมมติฐาน"
+                        ),
+                    })
+            edu_df = pd.DataFrame(edu_rows)
+            for _col in edu_df.columns:
+                if edu_df[_col].dtype == object:
+                    edu_df[_col] = edu_df[_col].astype(str)
+            st.dataframe(edu_df, width="stretch", hide_index=True)
 
     _run_cust_id = normalize_cust_id(draft_get("cust_id", ""))
     _run_cust_id_error = cust_id_validation_error(_run_cust_id)
@@ -1144,5 +2000,3 @@ def render_section_review_and_run(
                     if _disp[_col].dtype == object:
                         _disp[_col] = _disp[_col].astype(str)
                 st.dataframe(_disp, width="stretch")
-            
-            

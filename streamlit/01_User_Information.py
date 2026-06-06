@@ -6,7 +6,6 @@ from state import init_app_state, ADMIN_STAFF_IDS, hide_admin_pages_from_sidebar
 from sections import (
     render_section_cust_id,
     render_section_children,
-    render_section_parent_expenses,
     render_section_saving_plan,
     render_section_assumptions,
     render_section_review_and_run,
@@ -45,7 +44,7 @@ if not st.session_state.get("staff_id_verified"):
             placeholder="เช่น 12345",
             help="Staff ID ใช้สำหรับติดตามผู้ใช้งานเท่านั้น ไม่ได้ใช้ในการตรวจสอบสิทธิ์",
         )
-        _ok = st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width="stretch")
+        _ok = st.button("🔓 เข้าสู่ระบบ", type="primary", width="stretch")
 
         if _ok:
             _sid_clean = (_sid or "").strip()
@@ -87,9 +86,6 @@ render_section_cust_id()
 children, n_children, total_edu_plans, total_child_extra = render_section_children(draft)
 st.markdown("---")
 
-parent_expenses, n_parent_expenses = render_section_parent_expenses(draft)
-st.markdown("---")
-
 saving_plan, initial_savings, monthly_contribution, n_topups = render_section_saving_plan(draft)
 st.markdown("---")
 
@@ -98,13 +94,13 @@ st.markdown("---")
 
 render_section_review_and_run(
     children=children,
-    parent_expenses=parent_expenses,
+    parent_expenses=[],
     saving_plan=saving_plan,
     assumptions=assumptions,
     n_children=n_children,
     total_edu_plans=total_edu_plans,
     total_child_extra=total_child_extra,
-    n_parent_expenses=n_parent_expenses,
+    n_parent_expenses=0,
     n_topups=n_topups,
     initial_savings=initial_savings,
     monthly_contribution=monthly_contribution,

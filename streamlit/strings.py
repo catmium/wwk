@@ -151,6 +151,13 @@ _S: Dict[str, Any] = {
         "opt_country_SG":   "🇸🇬 สิงคโปร์",
         "opt_country_CN":   "🇨🇳 จีน",
         "opt_country_DE":   "🇩🇪 เยอรมนี",
+        "opt_country_FR":   "🇫🇷 ฝรั่งเศส",
+        "opt_country_IT":   "🇮🇹 อิตาลี",
+        "opt_country_NL":   "🇳🇱 เนเธอร์แลนด์",
+        "opt_country_BE":   "🇧🇪 เบลเยียม",
+        "opt_country_CH":   "🇨🇭 สวิตเซอร์แลนด์",
+        "opt_country_SE":   "🇸🇪 สวีเดน",
+        "opt_country_IE":   "🇮🇪 ไอร์แลนด์",
         "opt_country_Other":"🌐 อื่นๆ",
 
         # Slim expander (growth rate + basis year only)
@@ -191,19 +198,21 @@ _S: Dict[str, Any] = {
         "sec2_caption":      "ค่าใช้จ่ายพิเศษที่ไม่ได้ผูกกับลูกโดยตรง ที่อาจกระทบกับเงินออมเพื่อการศึกษา",
         "metric_n_parent":   "รายการค่าใช้จ่าย",
         "btn_add_parent":    "➕ เพิ่มรายการ",
+        "btn_rem_parent":    "🗑 ลบรายการล่าสุด",
         "parent_card_header":"ค่าใช้จ่ายครอบครัวที่ {n}",
 
         # ── Section 3: Saving Plan ──
-        "sec3_header":           "3) แผนการออมเพื่อการศึกษา",
+        "sec3_header":           "2) แผนการออมเพื่อการศึกษา",
         "sec3_caption":          "ระบุเงินออมเริ่มต้นและการออมรายเดือน",
         "label_initial_savings": "เงินออมเริ่มต้น (฿)",
         "label_monthly_contrib": "ออมรายเดือน (฿)",
         "metric_n_topups":       "เงินก้อนพิเศษ (topup)",
         "btn_add_topup":         "➕ เพิ่มเงินก้อนพิเศษ",
+        "btn_rem_topup":         "🗑 ลบรายการล่าสุด",
         "topup_card_header":     "เงินก้อนพิเศษที่ {n}",
 
         # ── Section 4: Assumptions ──
-        "sec4_header":             "4) สมมติฐาน",
+        "sec4_header":             "3) สมมติฐาน",
         "label_general_infl":      "อัตราเงินเฟ้อทั่วไป (%)",
         "label_general_infl_help": "เช่น 3.0 = เงินเฟ้อ 3% ต่อปี",
         "label_edu_infl":          "อัตราเงินเฟ้อค่าเล่าเรียน (%)",
@@ -220,7 +229,7 @@ _S: Dict[str, Any] = {
         "opt_timing_end":          "ปลายปี",
 
         # ── Section 5: Review & Run ──
-        "sec5_header":      "5) สร้างแบบจำลอง",
+        "sec5_header":      "4) สร้างแบบจำลอง",
         "review_expander":  "📋 ทบทวนข้อมูล",
         "btn_run":          "🚀 Simulation",
         "sim_success":      "✅ Simulation สำเร็จ — กำลังไปหน้าผลลัพธ์...",
@@ -263,7 +272,7 @@ _S: Dict[str, Any] = {
 
         # ── Status banner ──
         "status_ok":        "✅ **แผนการออมเพียงพอ** — เงินออมของคุณครอบคลุมค่าใช้จ่ายทั้งหมดที่คาดการณ์ไว้",
-        "status_fail":      "⚠️ **แผนการออมไม่เพียงพอ** — ต้องเพิ่มการออมอีก ฿{extra}/เดือน (ต้องออมเงินอย่างน้อย ฿{yr}/เดือน เพื่อให้แผนนี้เพียงพอ)",
+        "status_fail":      "⚠️ **แผนการออมไม่เพียงพอ** — ต้องเพิ่มการออมอีก ฿{extra}/เดือน (ต้องออมเงินอย่างน้อย ฿{min_req}/เดือน เพื่อให้แผนนี้เพียงพอ)",
         "shortfall_start":  "เริ่มปี {year}",
 
         # ── KPI cards ──
@@ -316,6 +325,7 @@ _S: Dict[str, Any] = {
         "legend_component": "ส่วนประกอบ",
 
         # ── Data tables ──
+        "tables_section_header": "📊 ตารางข้อมูล",
         "tbl_summary":      "📋 สรุปผล Simulation",
         "tbl_expense":      "📋 ตารางค่าใช้จ่าย",
         "tbl_saving":       "📋 ตารางแผนออมเงิน",
@@ -377,7 +387,7 @@ _S: Dict[str, Any] = {
         # ── Section 2: Bucket & Asset Config ──
         "sec2_header":      "2) การตั้งค่า Bucket & Asset",
         "sec2_caption":     "โครงสร้าง 3 Bucket ตายตัว — กำหนดระยะเวลาด้านบน แล้วตั้งค่า asset ภายในแต่ละ Bucket",
-        "bucket_tbl_header":"**ตั้งค่า Bucket** (เพิ่ม/ลบ/แก้ไขได้)",
+        "bucket_tbl_header":"**ตั้งค่า Bucket**",
         "bucket_tbl_hint":  "year_end = 0 หมายถึง open-ended (bucket สุดท้าย) | discount_rate_pct ใช้คิด PV requirement",
         "asset_tbl_header": "**ตั้งค่า Asset แต่ละ Bucket**",
         "asset_tbl_hint":   "ค่า return เป็น % (6.0 = 6% ต่อปี) | weight_pct รวมเท่าไรก็ได้ — ระบบ normalize อัตโนมัติ",
@@ -444,7 +454,7 @@ _S: Dict[str, Any] = {
         "err_manual_pct":   "% รวมกันต้องได้ 100% แต่ได้ {total:.2f}%",
 
         # ── Section 4: MC Config ──
-        "sec4_header":      "4) ตั้งค่า Monte Carlo",
+        "sec4_header":      "3) ตั้งค่า Monte Carlo",
         "advanced_settings_header": "⚙️ Advanced Settings",
         "label_n_paths":    "จำนวน paths",
         "label_n_paths_help":"จำนวน Monte Carlo simulation paths",
@@ -465,7 +475,7 @@ _S: Dict[str, Any] = {
         "sim_failed":       "❌ Simulation ล้มเหลว: {error}",
 
         # ── Section 6: Results ──
-        "sec6_header":      "5) ผลลัพธ์ Monte Carlo",
+        "sec6_header":      "4) ผลลัพธ์ Monte Carlo",
         "status_good":      "✅ **แผนการลงทุนผ่าน** — Success probability: {prob:.1%}  (shortfall: {sfail:.1%})",
         "status_warn":      "⚠️ **ความเสี่ยงปานกลาง** — Success probability: {prob:.1%}  (shortfall: {sfail:.1%})",
         "status_bad":       "❌ **ความเสี่ยงสูง** — Success probability: {prob:.1%}  (shortfall: {sfail:.1%})",
@@ -557,6 +567,212 @@ _S: Dict[str, Any] = {
         "diag_zero_std_warn":"⚠️ ไม่มี randomness",
         "diag_zero_std_err":"พบ std_dev = 0 ใน asset บางตัว! ทุก path จะได้ return เดิม — กรุณาแก้ใน Section 2",
         "diag_final_dist":  "**การกระจายตัวของ final_total_balance ทุก path**",
+
+        # ── New visualizations (added) ──
+        # Section header
+        "viz_extra_header":          "### 🔭 มุมมองเพิ่มเติม",
+        "viz_extra_caption":         "ภาพและตารางสรุปเพิ่มเติมเพื่อช่วยให้เห็นความเสี่ยงและกระแสเงินสดในแต่ละปีได้ชัดเจนขึ้น",
+
+        # 1) Fan chart — portfolio total P10/P50/P90 vs year
+        "fan_header":                "#### 📈 Fan Chart — เงินคงเหลือรวม (P10 / P50 / P90) ตามปี",
+        "fan_caption":               "พื้นที่สีอ่อน = ช่วง P10–P90 (80% ของ simulation), เส้นสีเข้ม = P50 (ค่ากลาง)",
+        "fan_y_title":               "ยอดเงินคงเหลือรวมทุกถัง (บาท)",
+        "fan_x_title":               "ปี",
+        "fan_tt_year":               "ปี",
+        "fan_tt_p10":                "กรณีแย่ (P10)",
+        "fan_tt_p50":                "กรณีกลาง (P50)",
+        "fan_tt_p90":                "กรณีดี (P90)",
+        "fan_band_label":            "ช่วง P10–P90",
+        "fan_line_label":            "P50",
+
+        # 2) Cashflow summary table (median per year)
+        "cf_header":                 "#### 💵 ตารางกระแสเงินสดสรุปรายปี (Median)",
+        "cf_caption":                "ค่าทุกตัวเป็น median รายปี — รวมข้ามคอลัมน์อาจไม่ตรงพอดี เพราะ median ของผลรวมไม่เท่ากับผลรวมของ median",
+        "cf_col_year":               "ปี",
+        "cf_col_contribution":       "เงินสะสม (P50)",
+        "cf_col_inv_return":         "ผลตอบแทน (P50)",
+        "cf_col_expense":            "ค่าใช้จ่าย (P50)",
+        "cf_col_ending":             "ยอดคงเหลือสิ้นปี (P50)",
+        "cf_col_sf_prob":            "โอกาสเงินไม่พอ",
+        "dl_cashflow":               "⬇ ดาวน์โหลดตารางกระแสเงินสด CSV",
+
+        # 3) Heatmap — shortfall probability bucket × year
+        "heat_header":               "#### 🔥 Heatmap โอกาสเงินไม่พอ (ถัง × ปี)",
+        "heat_caption":              "สีเข้ม = โอกาสเงินไม่พอสูงในปีนั้น ๆ ของถังนั้น ๆ — ช่วยระบุจุดอ่อนของแผน",
+        "heat_x_title":              "ปี",
+        "heat_y_title":              "กลุ่มลงทุน",
+        "heat_tt_year":              "ปี",
+        "heat_tt_bucket":            "กลุ่มลงทุน",
+        "heat_tt_prob":              "โอกาสเงินไม่พอ",
+        "heat_legend":               "โอกาสเงินไม่พอ",
+
+        # 4) Drawdown distribution
+        "dd_header":                 "#### 📉 การกระจายตัวของ Drawdown สูงสุด (per path)",
+        "dd_caption":                "Drawdown = % ที่ยอดเงินรวมลดจากจุดสูงสุดที่เคยถึง ก่อนฟื้นกลับ — บอกระดับ downside risk ที่ผู้ลงทุนอาจเจอ",
+        "dd_x_title":                "Max Drawdown (%)",
+        "dd_y_title":                "จำนวน path",
+        "dd_tt_bin":                 "ช่วง",
+        "dd_tt_count":               "จำนวน path",
+        "dd_kpi_p10":                "P10 (รุนแรงสุด 10%)",
+        "dd_kpi_p50":                "Median",
+        "dd_kpi_p90":                "P90 (อ่อนสุด 10%)",
+        "dd_kpi_worst":              "Drawdown แย่ที่สุด",
+        "dd_no_data":                "ไม่มีข้อมูล path detail (เปิด 'เก็บ path × year × bucket detail' ใน MC controls ก่อนรันใหม่)",
+    },
+
+    # ──────────────────────────────────────────────────────
+    # PAGE 3B  หน้า Investment Planning 2 (Goal-Based MC)
+    # ──────────────────────────────────────────────────────
+    "p3b": {
+        # ── Header ──
+        "page_title":          "Investment Planning 2",
+        "title":               "🎯 แผนการลงทุนแบบ Goal-Based (Monte Carlo)",
+        "caption":             "วางแผนเงินลงทุนเป้าหมายค่าเล่าเรียนแต่ละระดับ — จ่ายเป้าหมายที่ใกล้กว่าก่อน (FIFO) พร้อมเลือกได้ว่า goal ใดเป็น 'จ่ายเท่าที่มี'",
+
+        # ── Sidebar ──
+        "sidebar_done":        "### ✅ คำนวณแล้ว",
+        "sidebar_done_caption":"เลื่อนลงเพื่อดูผลลัพธ์",
+        "btn_back":            "← กลับหน้าจำลองค่าใช้จ่าย",
+
+        # ── Gate ──
+        "gate_warn":           "ยังไม่พบผลลัพธ์จากหน้า Expense Simulation — กรุณาไปหน้าก่อนแล้วรัน simulation",
+
+        # ── Section 1 — Plan Context ──
+        "sec1_header":         "1) สรุปข้อมูลแผนการศึกษา",
+        "ctx_n_goals":         "จำนวนเป้าหมาย",
+        "ctx_total_required":  "ค่าใช้จ่ายรวม",
+        "ctx_horizon":         "ช่วงเวลา",
+        "ctx_horizon_val":     "{start}–{end} ({n} ปี)",
+        "ctx_first_due":       "เป้าหมายแรกที่ต้องจ่าย",
+        "ctx_first_due_val":   "{label} (ปี {year})",
+
+        # ── Section 2 — Goal Configuration ──
+        "sec2_header":         "2) ตั้งค่าเป้าหมายการศึกษา",
+        "sec2_caption":        "เลือก 'จ่ายเท่าที่มี' สำหรับเป้าหมายที่ยอมข้ามได้ถ้าเงินไม่พอ (ปกติคือ ป.โท / ป.เอก)",
+        "col_goal":            "เป้าหมาย",
+        "col_due":             "ปีที่ต้องใช้",
+        "col_required":        "เงินที่ต้องใช้รวม",
+        "col_skippable":       "จ่ายเท่าที่มี",
+        "col_priority":        "ลำดับความสำคัญ",
+        "priority_help":       "เลขน้อย = สำคัญกว่า — ใช้เป็น tiebreaker เมื่อปีเริ่มเท่ากัน",
+
+        # ── Section 3 — Portfolio & MC config ──
+        "sec3_header":         "3) ตั้งค่าผลตอบแทนและ Monte Carlo",
+        "lbl_mean":            "ผลตอบแทนคาดหวังต่อปี (%)",
+        "lbl_std":              "ส่วนเบี่ยงเบนมาตรฐาน (%)",
+        "lbl_min":             "ผลตอบแทนต่ำสุด (clip, %)",
+        "lbl_max":             "ผลตอบแทนสูงสุด (clip, %)",
+        "lbl_dist":            "การแจกแจง",
+        "opt_dist_normal":     "Normal",
+        "opt_dist_t":          "Student-t (df=5)",
+        "lbl_n_paths":         "จำนวน path",
+        "lbl_seed":            "Random seed",
+        "lbl_no_neg_return":   "ไม่คิดดอกเมื่อยอดติดลบ",
+        "lbl_fr_threshold":    "เกณฑ์ Funded Ratio (สีเขียว)",
+        "lbl_p_threshold":     "เกณฑ์ P(จ่ายเต็ม) (สีเขียว)",
+
+        # ── Section 3 — Asset Allocation + MC (consolidated) ──
+        "sec3_caption_new":          "กำหนด asset / น้ำหนักเริ่มต้น / จุด rebalance และพารามิเตอร์ Monte Carlo",
+        "dynamic_assets_header":     "**🧱 รายการ Asset (เพิ่ม/ลบได้)**",
+        "dynamic_assets_caption":    "กรอกชื่อ asset + ผลตอบแทนคาดหวัง (%) + ความผันผวน (%) — รองรับจำนวน asset เท่าใดก็ได้",
+        "col_asset_name":            "สินทรัพย์",
+        "col_asset_mean":            "ผลตอบแทนคาดหวัง (%)",
+        "col_asset_std":             "ส่วนเบี่ยงเบน (%)",
+
+        # Initial allocation + Rebalance UI
+        "initial_allocation_header": "**🎯 Initial Allocation — น้ำหนักเริ่มต้น (ปี {year})**",
+        "initial_allocation_caption":"น้ำหนัก (%) ของแต่ละ asset ตั้งแต่ปีเริ่มต้น — จะใช้ค่านี้ไปเรื่อย ๆ จนถึงจุด rebalance ถัดไป (ถ้ามี)",
+        "rebalances_header":         "**🔄 จุด Rebalance**",
+        "rebalances_caption":        "เพิ่มจุดเปลี่ยนน้ำหนักได้ตามต้องการ — เลือกปี และระบุน้ำหนักใหม่ของแต่ละ asset",
+        "btn_add_rebalance":         "➕ เพิ่มจุด Rebalance",
+        "rebalance_event_header":    "🔄 Rebalance #{n} — ปี {year}",
+        "rebalance_year_label":      "เลือกปี",
+        "btn_delete_rebalance":      "🗑 ลบจุดนี้",
+        "rebalance_sum_invalid":     "⚠️ Rebalance #{n} (ปี {year}): น้ำหนักต้องรวม 100% (ปัจจุบัน {pct:.1f}%)",
+        "initial_sum_invalid":       "⚠️ Initial Allocation: น้ำหนักต้องรวม 100% (ปัจจุบัน {pct:.1f}%)",
+        "no_more_years_warn":        "ไม่มีปีที่ว่างให้เพิ่ม rebalance",
+        "weights_valid_ok":          "✅ น้ำหนักทุกจุดรวมเป็น 100% — พร้อมคำนวณ",
+        "block_run_invalid_weights": "❌ ไม่สามารถคำนวณได้ — กรุณาแก้ไขน้ำหนัก asset ให้รวม 100% ทุกจุดก่อน",
+        "no_assets_warn":            "⚠️ ต้องมีอย่างน้อย 1 asset ในรายการ",
+
+        # Schedule visualization
+        "glide_chart_header":        "**📉 น้ำหนักสินทรัพย์ตามเวลา (Step-function)**",
+        "glide_chart_caption":       "เส้นแสดงน้ำหนักจริงในแต่ละปี — คงที่ระหว่างจุด rebalance",
+        "glide_chart_x":             "ปี",
+        "glide_chart_y":             "น้ำหนัก",
+        "asset_cash_name":           "เงินสด/เงินฝาก",
+        "asset_bond_name":           "ตราสารหนี้",
+        "asset_thst_name":           "หุ้นไทย",
+        "asset_glst_name":           "หุ้นต่างประเทศ",
+
+        # MC sub-section
+        "mc_subheader":              "**⚙️ พารามิเตอร์ Monte Carlo**",
+
+        # ── Section 6 — Diagnostic Output Table ──
+        "sec6_header":               "6) ตารางตรวจสอบ Logic (Diagnostic)",
+        "sec6_caption":              "ตารางสรุปต่อปีสำหรับตรวจสอบความถูกต้องของ engine — แสดง median ของทุก path",
+        "diag_col_year":             "ปี",
+        "diag_col_contribution":     "เงินใส่ปลายปี",
+        "diag_col_return_p50":       "Return (median, %)",
+        "diag_col_portfolio_p10":    "Portfolio P10",
+        "diag_col_portfolio_p50":    "Portfolio P50",
+        "diag_col_portfolio_p90":    "Portfolio P90",
+        "diag_col_required":         "ต้องจ่ายรวม",
+        "diag_col_paid_p50":         "จ่ายจริง (median)",
+        "diag_col_shortfall_p50":    "ขาด (median)",
+        "diag_weights_header":       "**🧪 น้ำหนัก asset ที่ใช้แต่ละปี (เฉพาะโหมด Multi-Asset)**",
+
+        # ── Section 7 — Cashflow Summary (median per year) ──
+        "sec7_header":               "7) สรุป Cashflow รายปี (median)",
+        "sec7_caption":              "สรุปการไหลของเงินในแต่ละปี โดยใช้ค่า median ของทุก path — หมายเหตุ: ค่า median ของแต่ละคอลัมน์มาจากคนละ path กัน จึงไม่บวกลบเท่ากันเป๊ะ (ยอดสิ้นปี ≠ ยอดต้นปี + ผลตอบแทน + เงินใส่ − จ่ายค่าเล่าเรียน เสมอ)",
+        "cf_col_year":               "ปี",
+        "cf_col_beginning":          "ยอดต้นปี (median)",
+        "cf_col_growth":             "ผลตอบแทน (median)",
+        "cf_col_contribution":       "เงินใส่",
+        "cf_col_payment":            "จ่ายค่าเล่าเรียน (median)",
+        "cf_col_ending":             "ยอดสิ้นปี (median)",
+
+        # ── Section 4 — Run ──
+        "sec4_header":         "4) คำนวณ",
+        "btn_run":             "🚀 คำนวณ Monte Carlo",
+        "btn_solve":           "🧮 หาเงินรายเดือนขั้นต่ำ (เป้าหมายอ่อนสุด FR≥1.0)",
+        "running":             "กำลังคำนวณ...",
+        "solving":             "กำลังหาเงินรายเดือนขั้นต่ำ...",
+        "solve_result":        "เงินรายเดือนขั้นต่ำที่จำเป็น: **฿{amount:,.0f}/เดือน** (เพื่อให้ median FR ของเป้าหมายอ่อนสุด ≥ {target:.0%})",
+        "solve_unreachable":   "ไม่สามารถบรรลุเป้าหมายได้แม้จะใส่เงินสูงสุด ({hi:,.0f}/เดือน) — ลองลดจำนวน goal, ลดต้นทุน, หรือเปลี่ยน skippable",
+
+        # ── Section 5 — Results ──
+        "sec5_header":         "5) ผลลัพธ์",
+        "kpi_passed":          "เป้าหมายที่ผ่าน",
+        "kpi_passed_val":      "{passed} จาก {total}",
+        "kpi_avg_fr":          "Funded Ratio เฉลี่ย (median)",
+        "kpi_worst_goal":      "เป้าหมายอ่อนสุด",
+        "kpi_total_required":  "เงินที่ต้องใช้รวม",
+
+        "goals_table_header":  "### 📊 สรุปสถานะแต่ละเป้าหมาย",
+        "tbl_status":          "สถานะ",
+        "tbl_goal":            "เป้าหมาย",
+        "tbl_due":             "ปีที่ใช้",
+        "tbl_fr_median":       "Funded Ratio (median)",
+        "tbl_fr_range":        "FR (P10–P90)",
+        "tbl_p_funded":        "P(จ่ายเต็ม)",
+        "tbl_shortfall_p10":   "ขาด (worst, P10)",
+
+        "light_green":         "🟢 ผ่าน",
+        "light_yellow":        "🟡 เสี่ยง",
+        "light_red":           "🔴 ไม่ผ่าน",
+
+        "chart_fr_header":     "### 📈 Funded Ratio ของแต่ละเป้าหมาย",
+        "chart_fr_caption":    "แท่งแสดง median FR; เส้นแสดงช่วง P10–P90 ของ FR",
+        "chart_pv_header":     "### 💰 มูลค่า Portfolio ตลอดช่วงเวลา (P10/P50/P90)",
+        "chart_pv_caption":    "พื้นที่สีอ่อน = ช่วง P10–P90; เส้นกลาง = median",
+        "chart_liq_header":    "### 📅 เงินที่ต้องจ่ายในแต่ละปี (เรียงตาม FIFO)",
+        "chart_liq_caption":   "แท่งแสดงเงินที่จ่ายจริง (median) ต่อปี ต่อเป้าหมาย",
+
+        # ── Status / errors ──
+        "stale_warn":          "ค่าที่กรอกเปลี่ยนแล้ว — กดคำนวณใหม่",
+        "no_goals":            "ไม่พบเป้าหมายการศึกษา — กรุณาเพิ่มแผนการศึกษาในหน้ากรอกข้อมูล",
+        "result_empty":        "ยังไม่ได้คำนวณ — กดปุ่ม '🚀 คำนวณ Monte Carlo'",
     },
 
     # ──────────────────────────────────────────────────────
@@ -602,6 +818,7 @@ _S: Dict[str, Any] = {
     "warn": {
         "child_name_empty":       "พบชื่อลูกว่างอย่างน้อย 1 รายการ",
         "edu_age_range":          "แผนการศึกษาของ {child} ({level}) มีอายุเริ่มต้นมากกว่าอายุสิ้นสุด",
+        "edu_age_overlap":        "ช่วงอายุของระดับ '{level_a}' ({start_a}-{end_a}) และ '{level_b}' ({start_b}-{end_b}) ของ {child} ซ้อนทับกัน — กรุณาปรับช่วงอายุให้ไม่ทับกันก่อน simulate",
         "child_extra_year_range": "ค่าใช้จ่ายพิเศษ '{name}' ของ {child} มีปีเริ่มต้นมากกว่าปีสิ้นสุด",
         "child_extra_age_range":  "ค่าใช้จ่ายพิเศษ '{name}' ของ {child} มีอายุเริ่มต้นมากกว่าอายุสิ้นสุด",
         "parent_year_range":      "ค่าใช้จ่ายครอบครัว '{name}' มีปีเริ่มต้นมากกว่าปีสิ้นสุด",
