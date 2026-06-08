@@ -274,7 +274,7 @@ _PARENT_FIELDS = (
     "name", "amount", "type", "year", "end_year", "inflation_type", "note",
 )
 _TOPUP_FIELDS = (
-    "year", "amount", "note",
+    "year", "amount", "note", "mode", "year_start", "year_end",
 )
 
 
@@ -1630,15 +1630,23 @@ def render_section_saving_plan(draft):
     with _tp_label:
         st.metric(S("p1", "metric_n_topups"), n_topups)
 
-    annual_topups = []
+    _topup_amt_by_year: dict = {}
+    _topup_note_by_year: dict = {}
+    _topup_raw_count = 0
     for i in range(n_topups):
         f_year = f"topup.{i}.year"
         f_amount = f"topup.{i}.amount"
         f_note = f"topup.{i}.note"
+        f_mode = f"topup.{i}.mode"
+        f_year_start = f"topup.{i}.year_start"
+        f_year_end = f"topup.{i}.year_end"
 
         draft.setdefault(f_year, date.today().year)
         draft.setdefault(f_amount, 300000.0)
         draft.setdefault(f_note, "")
+        draft.setdefault(f_mode, "once")
+        draft.setdefault(f_year_start, date.today().year)
+        draft.setdefault(f_year_end, date.today().year)
 
         with st.container(border=True):
             _tp_hdr, _tp_del = st.columns([5, 1])
@@ -1661,41 +1669,121 @@ def render_section_saving_plan(draft):
                     )
                     st.rerun()
 
-            t1, t2, t3 = st.columns(3)
+            # ความถี่ + ช่องกรอกอยู่แถวเดียวกัน. จัด layout ตามโหมดปัจจุบันที่
+            # อ่านจาก draft ก่อน (p_selectbox on_change รีรันสคริปต์ ค่าจึงตรงกัน
+            # เสมอภายในรอบที่นิ่งแล้ว). scale: once [1,1,1,1] / multi [1,.5,.5,1,1].
+            _mode_pre = draft_get(f_mode, "once")
 
-            with t1:
-                p_number_input(
-                    SC("year"),
-                    field=f_year,
-                    default=date.today().year,
-                    min_value=YEAR_MIN_DEFAULT,
-                    max_value=YEAR_MAX_DEFAULT,
-                    step=1,
-                    format="%d",
-                    cast=int,
+            def _topup_mode_select():
+                return p_selectbox(
+                    "ความถี่",
+                    field=f_mode,
+                    options=["once", "multi"],
+                    default="once",
+                    format_func=lambda m: "ครั้งเดียว" if m == "once" else "หลายปี",
                 )
 
-            with t2:
-                p_number_input(
-                    SC("amount"),
-                    field=f_amount,
-                    default=300000.0,
-                    min_value=0.0,
-                    step=1000.0,
-                    format="%.0f",
-                    cast=float,
-                )
+            if _mode_pre == "multi":
+                cc1, cc2, cc3, cc4, cc5 = st.columns([1, 0.5, 0.5, 1, 1])
+                with cc1:
+                    _tp_mode = _topup_mode_select()
+                with cc2:
+                    p_number_input(
+                        "ปีแรก",
+                        field=f_year_start,
+                        default=date.today().year,
+                        min_value=YEAR_MIN_DEFAULT,
+                        max_value=YEAR_MAX_DEFAULT,
+                        step=1,
+                        format="%d",
+                        cast=int,
+                    )
+                with cc3:
+                    p_number_input(
+                        "ปีสุดท้าย",
+                        field=f_year_end,
+                        default=date.today().year,
+                        min_value=YEAR_MIN_DEFAULT,
+                        max_value=YEAR_MAX_DEFAULT,
+                        step=1,
+                        format="%d",
+                        cast=int,
+                    )
+                with cc4:
+                    p_number_input(
+                        SC("amount"),
+                        field=f_amount,
+                        default=300000.0,
+                        min_value=0.0,
+                        step=1000.0,
+                        format="%.0f",
+                        cast=float,
+                    )
+                with cc5:
+                    p_text_input(SC("note_optional"), field=f_note, default="")
 
-            with t3:
-                p_text_input(SC("note_optional"), field=f_note, default="")
+                _ys = int(draft_get(f_year_start))
+                _ye = int(draft_get(f_year_end))
+                if _ye < _ys:
+                    _ys, _ye = _ye, _ys
+                    st.caption("⚠️ ปีสุดท้ายน้อยกว่าปีแรก — ระบบสลับให้อัตโนมัติ")
+                _amt = float(draft_get(f_amount))
+                _nt = _none_if_blank(draft_get(f_note))
+                for _y in range(_ys, _ye + 1):
+                    _topup_amt_by_year[_y] = _topup_amt_by_year.get(_y, 0.0) + _amt
+                    if _nt and _y not in _topup_note_by_year:
+                        _topup_note_by_year[_y] = _nt
+                    _topup_raw_count += 1
+            else:
+                cc1, cc2, cc3, cc4 = st.columns([1, 1, 1, 1])
+                with cc1:
+                    _tp_mode = _topup_mode_select()
+                with cc2:
+                    p_number_input(
+                        SC("year"),
+                        field=f_year,
+                        default=date.today().year,
+                        min_value=YEAR_MIN_DEFAULT,
+                        max_value=YEAR_MAX_DEFAULT,
+                        step=1,
+                        format="%d",
+                        cast=int,
+                    )
+                with cc3:
+                    p_number_input(
+                        SC("amount"),
+                        field=f_amount,
+                        default=300000.0,
+                        min_value=0.0,
+                        step=1000.0,
+                        format="%.0f",
+                        cast=float,
+                    )
+                with cc4:
+                    p_text_input(SC("note_optional"), field=f_note, default="")
 
-            annual_topups.append(
-                AnnualTopup(
-                    year=int(draft_get(f_year)),
-                    amount=float(draft_get(f_amount)),
-                    note=_none_if_blank(draft_get(f_note)),
-                )
-            )
+                _oy = int(draft_get(f_year))
+                _oamt = float(draft_get(f_amount))
+                _onote = _none_if_blank(draft_get(f_note))
+                _topup_amt_by_year[_oy] = _topup_amt_by_year.get(_oy, 0.0) + _oamt
+                if _onote and _oy not in _topup_note_by_year:
+                    _topup_note_by_year[_oy] = _onote
+                _topup_raw_count += 1
+
+    # รวม top-up ที่ปีทับซ้อนกันให้เป็นปีละ 1 รายการ (ยอดรวม) — กัน
+    # duplicate-year error และให้ปีเดียวกันบวกยอดกันตามที่ผู้ใช้คาดหวัง.
+    annual_topups = [
+        AnnualTopup(
+            year=_y,
+            amount=_topup_amt_by_year[_y],
+            note=_topup_note_by_year.get(_y),
+        )
+        for _y in sorted(_topup_amt_by_year)
+    ]
+    if len(annual_topups) < _topup_raw_count:
+        st.caption(
+            "ℹ️ มีปีที่ทับซ้อนกัน — ระบบรวมยอดเงินก้อนพิเศษของปีนั้นให้อัตโนมัติแล้ว"
+        )
 
     # Add button ที่ท้ายลิสต์ (ใช้แทนปุ่ม ➕/➖ ที่เคยอยู่ header)
     if st.button(

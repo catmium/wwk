@@ -1207,6 +1207,16 @@ def _build_term_context(
     for lock_year, idxs in eoy_locks_by_year.items():
         idxs.sort(key=lambda j: _term_quality_sort_key(term_list[j], j))
 
+    # NEW timing: a term locks at the START of its buy_year (after that year's
+    # top-up). start0 terms (buy_year <= start) key at start_year (year 0) so a
+    # year-0 top-up can fund them if the initial allocation fell short.
+    locks_by_buy_year: Dict[int, List[int]] = {}
+    for j in range(n_term):
+        _eff = max(buy_year[j], start_year)
+        locks_by_buy_year.setdefault(_eff, []).append(j)
+    for _y, _idxs in locks_by_buy_year.items():
+        _idxs.sort(key=lambda j: _term_quality_sort_key(term_list[j], j))
+
     return {
         "term_list": term_list,
         "n_term": n_term,
@@ -1217,6 +1227,7 @@ def _build_term_context(
         "payout_year": payout_year,
         "start0_order": start0_order,
         "eoy_locks_by_year": eoy_locks_by_year,
+        "locks_by_buy_year": locks_by_buy_year,
     }
 
 
@@ -1471,18 +1482,17 @@ def _simulate_one_mc_path_l2(
         # allocation: those start active with BB = principal and no year-0
         # transfer_in. Everything else starts empty.
         _seed_vals = static_ctx.get("term_initial_values") or [0.0] * n_term
-        _seed_skipped = static_ctx.get("term_prefund_skipped") or [False] * n_term
         term_value = [float(_seed_vals[j]) for j in range(n_term)]   # compounded value
         term_active = [term_value[j] > 0.0 for j in range(n_term)]   # currently locked?
         term_bought = [term_value[j] > 0.0 for j in range(n_term)]   # ever purchased?
-        term_skipped = [bool(_seed_skipped[j]) for j in range(n_term)]  # purchase skipped?
+        term_skipped = [False] * n_term                              # purchase skipped?
         term_rollovers_left = list(term_ctx["max_rollovers"])
         term_min_inv = term_ctx["min_inv"]
         term_len = term_ctx["term_len"]
         # absolute payout year per asset; re-pinned at lock time (rollover bumps it)
         term_maturity_year = [int(term_ctx["payout_year"][j]) for j in range(n_term)]
         start0_order = term_ctx["start0_order"]
-        eoy_locks_by_year = term_ctx["eoy_locks_by_year"]
+        locks_by_buy_year = term_ctx["locks_by_buy_year"]
         term_returns = _sample_term_returns_for_path(
             path_id=path_id,
             n_years=n_years,
@@ -1524,16 +1534,26 @@ def _simulate_one_mc_path_l2(
                 tb_bb[j] = float(term_value[j])
                 tb_sampled[j] = float(term_returns[yi, j])
 
-        # STEP 0 (year 0 only) — start-of-plan term locks (buy_year <= start).
-        # Locked at the very START of year 0, before inflow/rebalance, so the
-        # principal never earns the liquid return this year (it earns the TERM
-        # return via the accrual step below, since term_active flips True here).
-        # The in-place draw mutates `balances`, which currently aliases
-        # beginning_balances — copy first so BB shows the pre-draw state and the
-        # draw is recorded as transfer_out on the long bucket.
-        if yi == 0 and n_term > 0 and start0_order:
-            balances = balances.copy()
-            for j in start0_order:
+        # ── Inflow + term lock (start-of-year ordering) ──
+        # `balances` currently aliases beginning_balances; copy so BB keeps the
+        # pre-inflow state and we can mutate freely.
+        balances = balances.copy()
+
+        # 1) TOP-UP — a start-of-year lump routed to the LONG (growth) bucket so a
+        #    term scheduled this year can be funded from it (rebalance later moves
+        #    whatever the short bucket needs). Recorded per-bucket as topup_in.
+        topup_in = np.zeros(n_buckets, dtype=float)
+        _topup_total = float(topup_arr[yi])
+        if _topup_total > 0 and n_buckets > 0:
+            topup_in[long_idx] = _topup_total
+            balances[long_idx] += _topup_total
+
+        # 2) TERM LOCKS for buy_year == year (after top-up, BEFORE monthly
+        #    contribution). Affordability = current LONG balance (= beginning +
+        #    top-up). Includes year-0 retries of start0 terms the initial
+        #    allocation could not fund. All-or-nothing; skip is permanent.
+        if n_term > 0:
+            for j in locks_by_buy_year.get(year, []):
                 if term_bought[j] or term_skipped[j]:
                     continue
                 if float(balances[long_idx]) >= term_min_inv[j]:
@@ -1543,42 +1563,39 @@ def _simulate_one_mc_path_l2(
                     term_value[j] = term_min_inv[j]
                     term_active[j] = True
                     term_bought[j] = True
-                    # term_maturity_year already pinned to buy + term*(rollovers+1).
+                    term_maturity_year[j] = int(term_ctx["payout_year"][j])
                 else:
                     term_skipped[j] = True
 
-        # A) inflow allocation
-        total_inflow = float(contribution_arr[yi] + topup_arr[yi])
-        # OPT-D: skip allocator entirely when no inflow this year (common in retirement years)
-        if total_inflow <= 0:
-            contribution_in = _zero_contribution_buf
+        # 3) MONTHLY CONTRIBUTION (gradual) — allocated per the funding rule.
+        _contrib_total = float(contribution_arr[yi])
+        if _contrib_total <= 0:
+            contribution_in = np.zeros(n_buckets, dtype=float)
         elif priority_idx_arr is not None:
-            # OPT-4: int-index fast path (logic identical, no dict lookups)
             contribution_in = _allocate_yearly_inflow_to_buckets_array_fast(
-                inflow_amount=total_inflow,
+                inflow_amount=_contrib_total,
                 remaining_required_arr=remaining_required,
                 priority_idx_arr=priority_idx_arr,
                 n_buckets=n_buckets,
             )
         else:
             contribution_in = _allocate_yearly_inflow_to_buckets_array(
-                inflow_amount=total_inflow,
+                inflow_amount=_contrib_total,
                 remaining_required_arr=remaining_required,
                 contribution_priority_names=priority_idx_names,
                 bucket_to_idx=bucket_to_idx,
                 n_buckets=n_buckets,
             )
-        # B) add inflow, apply return, apply expense
-        #    - expense_out hits SHORT bucket (index 0) only — no pro-rata. The
-        #      short bucket is the bill-paying bucket; the long bucket compounds
-        #      untouched until rebalance refills the short bucket.
         balances = balances + contribution_in
 
-        # Term events (accrual, maturity/payout, EOY locks) are applied AFTER the
-        # liquid return/expense step below so matured cash can refill the short
-        # bucket the SAME year (Choice B) and EOY locks happen after rebalance.
-        base_for_return = balances
-        investment_return = np.where(base_for_return > 0, base_for_return * sampled_returns[yi], 0.0)
+        # 4) RETURN — the lump (beginning + top-up − term draw) earns the FULL
+        #    year; the gradual monthly contribution earns HALF a year (×0.5)
+        #    because it is paid in over the year.
+        _lump_base = balances - contribution_in
+        investment_return = (
+            np.where(_lump_base > 0, _lump_base * sampled_returns[yi], 0.0)
+            + np.where(contribution_in > 0, contribution_in * sampled_returns[yi] * 0.5, 0.0)
+        )
         np.round(investment_return, 2, out=investment_return)
 
         year_total_expense = float(total_expense_by_year_arr[yi])
@@ -1586,7 +1603,7 @@ def _simulate_one_mc_path_l2(
         if n_buckets > 0:
             expense_out_arr[0] = year_total_expense
 
-        balances = base_for_return + investment_return - expense_out_arr
+        balances = balances + investment_return - expense_out_arr
         np.round(balances, 2, out=balances)
 
         # TERM ACCRUAL (EOY) — active (locked) holdings compound by their own
@@ -1661,30 +1678,6 @@ def _simulate_one_mc_path_l2(
         # Track bucket 0's minimum balance (the bill-paying bucket).
         min_bucket0_balance = min(min_bucket0_balance, float(balances[0]))
 
-        # END-OF-YEAR TERM LOCKS — assets whose buy_year == year+1 lock their
-        # principal NOW (EOY of buy_year-1), AFTER this year's rebalance so the
-        # draw never starves the short bucket. Principal is drawn from the LONG
-        # bucket; first accrual happens NEXT year (buy_year) because term_active
-        # flips True here, after this year's accrual pass already ran. Assets
-        # sharing this lock moment are attempted in quality order; all-or-nothing
-        # per asset; skip-and-continue; a skip is permanent.
-        if n_term > 0:
-            for j in eoy_locks_by_year.get(year, []):
-                if term_bought[j] or term_skipped[j]:
-                    continue
-                if float(balances[long_idx]) >= term_min_inv[j]:
-                    balances[long_idx] -= term_min_inv[j]
-                    transfer_out[long_idx] += term_min_inv[j]
-                    tb_in[j] += term_min_inv[j]
-                    term_value[j] = term_min_inv[j]
-                    term_active[j] = True
-                    term_bought[j] = True
-                    # Maturity fixed at buy + term*(rollovers+1) (precomputed).
-                    term_maturity_year[j] = int(term_ctx["payout_year"][j])
-                else:
-                    term_skipped[j] = True
-            np.round(balances, 2, out=balances)
-
         # Finalize term end-of-year value (EB_term) for the projected term track.
         # Captured AFTER accrual, maturity/payout, and EOY lock so the per-row
         # identity EB = BB + transfer_in(lock) + investment_return(accrual)
@@ -1719,6 +1712,7 @@ def _simulate_one_mc_path_l2(
                 _liq_end = _row_start + n_buckets
                 detail_buffers["beginning_balance"][_row_start:_liq_end] = np.round(beginning_balances, 2)
                 detail_buffers["contribution_in"][_row_start:_liq_end] = np.round(contribution_in, 2)
+                detail_buffers["topup_in"][_row_start:_liq_end] = np.round(topup_in, 2)
                 detail_buffers["investment_return"][_row_start:_liq_end] = np.round(investment_return, 2)
                 detail_buffers["expense_out"][_row_start:_liq_end] = np.round(expense_out_arr, 2)
                 detail_buffers["transfer_in"][_row_start:_liq_end] = np.round(transfer_in, 2)
@@ -1736,6 +1730,7 @@ def _simulate_one_mc_path_l2(
                     #   ending_balance = EB_term. contribution_in / expense_out = 0.
                     detail_buffers["beginning_balance"][_term_start:_term_end] = np.round(tb_bb, 2)
                     detail_buffers["contribution_in"][_term_start:_term_end] = 0.0
+                    detail_buffers["topup_in"][_term_start:_term_end] = 0.0
                     detail_buffers["investment_return"][_term_start:_term_end] = np.round(tb_ret, 2)
                     detail_buffers["expense_out"][_term_start:_term_end] = 0.0
                     detail_buffers["transfer_in"][_term_start:_term_end] = np.round(tb_in, 2)
@@ -1752,6 +1747,7 @@ def _simulate_one_mc_path_l2(
                         "bucket_kind": "liquid",
                         "beginning_balance": round(float(beginning_balances[bi]), 2),
                         "contribution_in": round(float(contribution_in[bi]), 2),
+                        "topup_in": round(float(topup_in[bi]), 2),
                         "investment_return": round(float(investment_return[bi]), 2),
                         "expense_out": round(float(expense_out_arr[bi]), 2),
                         "transfer_in": round(float(transfer_in[bi]), 2),
@@ -1768,6 +1764,7 @@ def _simulate_one_mc_path_l2(
                         "bucket_kind": "term",
                         "beginning_balance": round(float(tb_bb[j]), 2),
                         "contribution_in": 0.0,
+                        "topup_in": 0.0,
                         "investment_return": round(float(tb_ret[j]), 2),
                         "expense_out": 0.0,
                         "transfer_in": round(float(tb_in[j]), 2),
@@ -1968,7 +1965,6 @@ def run_bucket_engine_monte_carlo_level2(
     # insufficient funds → permanent skip. EOY locks (buy_year > start) are
     # unchanged — they still draw via transfer in their lock year.
     _term_initial_values = [0.0] * _n_term
-    _term_prefund_skipped = [False] * _n_term
     if _n_term > 0 and _term_ctx["start0_order"]:
         _long_idx0 = int(static_ctx["n_buckets"]) - 1
         _bal0_arr = static_ctx["balances0"]
@@ -1979,8 +1975,8 @@ def run_bucket_engine_monte_carlo_level2(
                 _bal0_arr[_long_idx0] -= _pp
                 _term_initial_values[_j] = _pp
                 _prefund_drawn += _pp
-            else:
-                _term_prefund_skipped[_j] = True
+            # else: NOT funded from the initial allocation — left to retry at the
+            # year-0 lock (it can use a year-0 top-up). Not a permanent skip here.
         # Reflect the carve-out in the displayed initial allocation (long bucket).
         if (
             _prefund_drawn > 0
@@ -1996,7 +1992,6 @@ def run_bucket_engine_monte_carlo_level2(
                 - _prefund_drawn
             ).clip(lower=0.0)
     static_ctx["term_initial_values"] = _term_initial_values
-    static_ctx["term_prefund_skipped"] = _term_prefund_skipped
 
     # ----------------------------------------------------
     # Main MC loop
@@ -2014,7 +2009,7 @@ def run_bucket_engine_monte_carlo_level2(
     # downstream summary builders.
     _detail_cols = [
         "path_id", "year", "bucket_name", "bucket_kind",
-        "beginning_balance", "contribution_in", "investment_return", "expense_out",
+        "beginning_balance", "contribution_in", "topup_in", "investment_return", "expense_out",
         "transfer_in", "transfer_out", "ending_balance",
         "sampled_return", "is_shortfall",
     ]
@@ -2034,6 +2029,7 @@ def run_bucket_engine_monte_carlo_level2(
             "sampled_return":    np.empty(_n_total_rows, dtype=float),
             "beginning_balance": np.empty(_n_total_rows, dtype=float),
             "contribution_in":   np.empty(_n_total_rows, dtype=float),
+            "topup_in":          np.empty(_n_total_rows, dtype=float),
             "transfer_in":       np.empty(_n_total_rows, dtype=float),
             "investment_return": np.empty(_n_total_rows, dtype=float),
             "expense_out":       np.empty(_n_total_rows, dtype=float),
@@ -2114,6 +2110,7 @@ def run_bucket_engine_monte_carlo_level2(
             "bucket_kind":       kind_col,
             "beginning_balance": detail_buffers["beginning_balance"],
             "contribution_in":   detail_buffers["contribution_in"],
+            "topup_in":          detail_buffers["topup_in"],
             "investment_return": detail_buffers["investment_return"],
             "expense_out":       detail_buffers["expense_out"],
             "transfer_in":       detail_buffers["transfer_in"],
