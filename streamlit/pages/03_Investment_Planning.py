@@ -71,6 +71,16 @@ expense_end_year = (
     if expense_df is not None and not expense_df.empty
     else int(assumptions.start_year)
 )
+# Plan horizon spans from the earliest of (saving start, expense start) — money
+# can already be saved/invested before expenses begin — through the last
+# expense year.
+saving_start_year = (
+    int(saving_df["year"].min())
+    if saving_df is not None and not saving_df.empty and "year" in saving_df.columns
+    else expense_start_year
+)
+plan_start_year = min(saving_start_year, expense_start_year)
+plan_end_year = expense_end_year
 total_projected_expense = (
     float(expense_df["inflated_amount"].sum())
     if expense_df is not None and not expense_df.empty
@@ -131,10 +141,10 @@ with st.sidebar:
 # ──────────────────────────────────────────────────────
 st.subheader(S("p3", "sec1_header"))
 with st.container(border=True):
-    _t = expense_end_year - expense_start_year + 1
+    _t = plan_end_year - plan_start_year + 1
     _cx = st.columns(3)
     _cx[0].metric(S("p3", "ctx_total_exp"), f"฿{total_projected_expense:,.0f}")
-    _cx[1].metric(S("p3", "ctx_horizon"), S("p3", "ctx_horizon_val", start=expense_start_year, end=expense_end_year, n=_t))
+    _cx[1].metric(S("p3", "ctx_horizon"), S("p3", "ctx_horizon_val", start=plan_start_year, end=plan_end_year, n=_t))
     _cx[2].metric(S("p3", "ctx_peak"), S("p3", "ctx_peak_val", amount=peak_annual_expense, year=peak_annual_expense_year))
 
     _cy = st.columns(3)
