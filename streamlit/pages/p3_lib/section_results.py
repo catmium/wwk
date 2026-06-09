@@ -665,31 +665,16 @@ def render(
         _path_cagr = (_c3_agg["_num"] / _c3_agg["_den"]).rename("realized_cagr")
 
         if not _path_cagr.empty:
-            # Expected-return reference line: allocation-weighted for the total
-            # scope, the bucket's own discount_rate for a single liquid bucket,
-            # omitted for a single term asset.
-            _expected_ret = None
-            if _c3_sel == _C3_TOTAL:
-                _alloc_df_exp = getattr(mc_result, "initial_allocation_df", pd.DataFrame())
-                if (
-                    not _alloc_df_exp.empty
-                    and "recommended_initial_amount" in _alloc_df_exp.columns
-                    and "bucket_name" in _alloc_df_exp.columns
-                ):
-                    _bucket_exp_map = {
-                        str(d["name"]): float(d.get("discount_rate", 0.0))
-                        for d in _new_defs
-                    }
-                    _alloc_sum = float(_alloc_df_exp["recommended_initial_amount"].sum())
-                    if _alloc_sum > 0:
-                        _expected_ret = sum(
-                            float(r["recommended_initial_amount"])
-                            * _bucket_exp_map.get(str(r["bucket_name"]), 0.0)
-                            for _, r in _alloc_df_exp.iterrows()
-                        ) / _alloc_sum
-            elif not _c3_sel.startswith("Term: "):
-                _bmap_c3 = {str(d["name"]): float(d.get("discount_rate", 0.0)) for d in _new_defs}
-                _expected_ret = _bmap_c3.get(_c3_sel)
+            # "ผลตอบแทนเฉลี่ย" = the MEAN of the realized-return distribution that
+            # is actually plotted, so the line sits at the centre of the histogram
+            # and stays consistent with its own P10/P50/P90.
+            #
+            # (Previously this used the INITIAL-allocation-weighted *planned*
+            # return for the overall scope. That is a different quantity: the
+            # realized figure is dollar-time-weighted — the short bucket holds a
+            # large share of the money in the early years — so the planned value
+            # could land far from the centre, e.g. up near P90.)
+            _expected_ret = float(_path_cagr.mean())
 
             _cagr_p10 = float(_path_cagr.quantile(0.10))
             _cagr_p50 = float(_path_cagr.quantile(0.50))
@@ -1234,6 +1219,12 @@ def render(
                         y=alt.Y("p10:Q", title="ยอดเงิน ณ ต้นปี (บาท)", axis=alt.Axis(format=",.0f")),
                         y2=alt.Y2("p90:Q"),
                         color=alt.Color("bucket_name:N", scale=_t52_scale, legend=None),
+                        tooltip=[
+                            alt.Tooltip("bucket_name:N", title="สินทรัพย์"),
+                            alt.Tooltip("year:O", title="ปี"),
+                            alt.Tooltip("p10:Q", title="P10 (บาท)", format=",.0f"),
+                            alt.Tooltip("p90:Q", title="P90 (บาท)", format=",.0f"),
+                        ],
                     )
                 )
                 _tmean = (
@@ -1442,7 +1433,7 @@ def render(
         and {"path_id", "year", "ending_balance"}.issubset(_viz_path_df.columns)
     ):
         _agg_cols = {"ending_balance": "sum"}
-        for _c in ("beginning_balance", "contribution_in", "investment_return", "expense_out"):
+        for _c in ("beginning_balance", "contribution_in", "topup_in", "investment_return", "expense_out"):
             if _c in _viz_path_df.columns:
                 _agg_cols[_c] = "sum"
         _port_path_year = (
@@ -1545,6 +1536,25 @@ def render(
                 _tt.insert(4, alt.Tooltip("age_end:Q",   title="อายุจบ",   format="d"))
 
             _n_children_tl = _tl_df["child_name"].nunique()
+            # Start the timeline x-axis at the earliest plan year (min of saving /
+            # expense start), through the latest education year.
+            _exp_min_r = (
+                int(expense_df["year"].min())
+                if expense_df is not None and not expense_df.empty and "year" in expense_df.columns
+                else int(_tl_df["year_start"].min())
+            )
+            _exp_max_r = (
+                int(expense_df["year"].max())
+                if expense_df is not None and not expense_df.empty and "year" in expense_df.columns
+                else int(_tl_df["year_end"].max())
+            )
+            _sav_min_r = (
+                int(saving_df["year"].min())
+                if saving_df is not None and not saving_df.empty and "year" in saving_df.columns
+                else _exp_min_r
+            )
+            _tl_x_start = min(_exp_min_r, _sav_min_r)
+            _tl_x_end = max(_exp_max_r + 1, int(_tl_df["year_end_excl"].max()))
             _tl_chart = (
                 alt.Chart(_tl_df)
                 .mark_bar(cornerRadius=4, opacity=0.85)
@@ -1552,7 +1562,7 @@ def render(
                     x=alt.X(
                         "year_start:Q",
                         title="ปี",
-                        scale=alt.Scale(zero=False),
+                        scale=alt.Scale(zero=False, domain=[_tl_x_start, _tl_x_end]),
                         axis=alt.Axis(format="d", tickMinStep=1),
                     ),
                     x2=alt.X2("year_end_excl:Q"),
@@ -1832,6 +1842,8 @@ def render(
             _mc_agg["_avg_beginning"] = ("beginning_balance", "mean")
         if "contribution_in" in _port_path_year.columns:
             _mc_agg["_avg_contribution"] = ("contribution_in", "mean")
+        if "topup_in" in _port_path_year.columns:
+            _mc_agg["_avg_topup"] = ("topup_in", "mean")
         if "investment_return" in _port_path_year.columns:
             _mc_agg["_avg_inv_return"] = ("investment_return", "mean")
 
@@ -1908,15 +1920,18 @@ def render(
                 _expense_sum = _expense_sum + _cf_full[_cn].astype(float)
         _beg_part = _cf_full["_avg_beginning"] if "_avg_beginning" in _cf_full.columns else 0.0
         _ctr_part = _cf_full["_avg_contribution"] if "_avg_contribution" in _cf_full.columns else 0.0
+        _topup_part = _cf_full["_avg_topup"] if "_avg_topup" in _cf_full.columns else 0.0
         _ret_part = _cf_full["_avg_inv_return"] if "_avg_inv_return" in _cf_full.columns else 0.0
-        _cf_full["_recomputed_ending"] = _beg_part + _ctr_part + _ret_part - _expense_sum
+        _cf_full["_recomputed_ending"] = _beg_part + _topup_part + _ctr_part + _ret_part - _expense_sum
 
         # ----- Compose display in user-requested column order -----
         _display_pairs = [("year", "ปี")]
         if "_avg_beginning" in _cf_full.columns:
             _display_pairs.append(("_avg_beginning", "เงินคงเหลือต้นปี"))
+        if "_avg_topup" in _cf_full.columns:
+            _display_pairs.append(("_avg_topup", "เงิน top-up"))
         if "_avg_contribution" in _cf_full.columns:
-            _display_pairs.append(("_avg_contribution", "เงินสะสมเข้าใหม่"))
+            _display_pairs.append(("_avg_contribution", "ออมรายเดือน"))
         if "_avg_inv_return" in _cf_full.columns:
             _display_pairs.append(("_avg_inv_return", "ผลตอบแทน"))
         for _cn in _child_cols_ordered:
@@ -1946,6 +1961,204 @@ def render(
         )
     else:
         st.info(S("p3", "dd_no_data"))
+
+    # ============================================================
+    # CHART 8: per-year, per-asset money guideline (expected scenario)
+    # ============================================================
+    # Aggregate the path×year×bucket detail into one actionable guide: how much
+    # to save into each asset each year, expected return, what is paid out, how
+    # the rebalance flows, and the ending balance (mean + P10–P90 range). Mean is
+    # used for every flow so the table stays internally balanced
+    # (EB = BB + ออม + rebalance + return − จ่าย; linear → holds under averaging).
+    st.markdown("#### 8. 🧭 แนวทางการวางเงินรายปี-รายสินทรัพย์ (Guideline — สถานการณ์คาดหวัง)")
+    st.caption(
+        "สรุปจากทุก simulation (ค่าเฉลี่ย) ว่าแต่ละปีควรมีเงินในสินทรัพย์ไหนเท่าไร "
+        "ออมเข้า/จ่ายออก/ปรับสมดุล (rebalance) อย่างไร — ยอดคงเหลือแสดงช่วง P10–P90 "
+        "เป็นแนวทาง ไม่ใช่การรับประกันผล"
+    )
+    _g8 = _path_detail_full
+    if (
+        _g8 is not None
+        and not _g8.empty
+        and {
+            "year", "bucket_name", "bucket_kind", "beginning_balance",
+            "contribution_in", "transfer_in", "investment_return",
+            "expense_out", "transfer_out", "ending_balance",
+        }.issubset(_g8.columns)
+    ):
+        if "topup_in" not in _g8.columns:
+            _g8 = _g8.assign(topup_in=0.0)
+        _agg8 = _g8.groupby(["year", "bucket_kind", "bucket_name"], as_index=False).agg(
+            bb=("beginning_balance", "mean"),
+            topup=("topup_in", "mean"),
+            contrib=("contribution_in", "mean"),
+            tin=("transfer_in", "mean"),
+            ret=("investment_return", "mean"),
+            exp=("expense_out", "mean"),
+            tout=("transfer_out", "mean"),
+            eb=("ending_balance", "mean"),
+            eb_p10=("ending_balance", lambda s: float(s.quantile(0.10))),
+            eb_p90=("ending_balance", lambda s: float(s.quantile(0.90))),
+        )
+        _agg8["year"] = _agg8["year"].astype(int)
+        _agg8["rebalance_net"] = _agg8["tin"] - _agg8["tout"]
+
+        # Split "จ่ายออก" into per-child columns. The engine books the full annual
+        # expense on the SHORT bucket; we split it by each child's share of that
+        # year's PLANNED expense (from expense_df), so the per-child amounts sum
+        # back to "จ่ายออก" and the table still balances.
+        _exp_child_cols8 = []
+        if (
+            expense_df is not None
+            and not expense_df.empty
+            and {"year", "child_name", "inflated_amount"}.issubset(expense_df.columns)
+        ):
+            _seen8, _ord_names8 = set(), []
+            for _n8 in expense_df["child_name"].astype(str).tolist():
+                if _n8 not in _seen8:
+                    _seen8.add(_n8)
+                    _ord_names8.append(_n8)
+            _exp_child_cols8 = (
+                [n for n in _ord_names8 if n != "Parent"]
+                + [n for n in _ord_names8 if n == "Parent"]
+            )
+            _yr_total8 = expense_df.groupby("year")["inflated_amount"].sum()
+            _share8 = (
+                expense_df.groupby(["year", "child_name"], as_index=False)["inflated_amount"].sum()
+                .pivot(index="year", columns="child_name", values="inflated_amount")
+                .fillna(0.0)
+            )
+            _share8 = _share8.div(_yr_total8, axis=0).fillna(0.0).reset_index()
+            _share8["year"] = _share8["year"].astype(int)
+            _agg8 = _agg8.merge(_share8, on="year", how="left")
+            for _cn8 in _exp_child_cols8:
+                if _cn8 in _agg8.columns:
+                    # share × the row's expense_out → that child's portion (only the
+                    # short bucket carries expense_out, so other assets become 0).
+                    _agg8[_cn8] = (_agg8[_cn8].fillna(0.0) * _agg8["exp"]).round(0)
+
+        # Stable display order: liquid buckets (in _new_defs order), then terms.
+        _liq_names8 = [str(d["name"]) for d in _new_defs]
+        _term_names8 = sorted(
+            _agg8.loc[_agg8["bucket_kind"] == "term", "bucket_name"].astype(str).unique().tolist()
+        )
+        _order_list8 = _liq_names8 + [n for n in _term_names8 if n not in _liq_names8]
+        _rank8 = {a: i for i, a in enumerate(_order_list8)}
+        _agg8["_ord8"] = _agg8["bucket_name"].astype(str).map(_rank8).fillna(999).astype(int)
+        _agg8 = _agg8.sort_values(["year", "_ord8", "bucket_name"]).reset_index(drop=True)
+
+        # ── Visual: stacked area of expected ending balance per asset per year ──
+        _g8_pal = ["#60a5fa", "#34d399", "#f59e0b", "#fb923c", "#eab308", "#f97316", "#a78bfa"]
+        _g8_scale = alt.Scale(
+            domain=_order_list8,
+            range=[_g8_pal[i % len(_g8_pal)] for i in range(len(_order_list8))],
+        )
+        _stack8 = (
+            alt.Chart(_agg8[_agg8["eb"] > 0])
+            .mark_area(opacity=0.85)
+            .encode(
+                x=alt.X("year:O", title="ปี"),
+                y=alt.Y(
+                    "eb:Q", stack="zero",
+                    title="ยอดคงเหลือเฉลี่ย ณ สิ้นปี (บาท)",
+                    axis=alt.Axis(format=",.0f"),
+                ),
+                color=alt.Color("bucket_name:N", scale=_g8_scale, title="สินทรัพย์"),
+                order=alt.Order("_ord8:Q"),
+                tooltip=[
+                    alt.Tooltip("year:O", title="ปี"),
+                    alt.Tooltip("bucket_name:N", title="สินทรัพย์"),
+                    alt.Tooltip("eb:Q", title="ยอดคงเหลือเฉลี่ย", format=",.0f"),
+                    alt.Tooltip("eb_p10:Q", title="P10", format=",.0f"),
+                    alt.Tooltip("eb_p90:Q", title="P90", format=",.0f"),
+                ],
+            )
+            .properties(height=320)
+        )
+        st.altair_chart(_stack8, width="stretch")
+
+        # ── Guideline table (one row per ปี × สินทรัพย์) ──
+        _tbl8 = _agg8.copy()
+        _tbl8["สินทรัพย์"] = _tbl8.apply(
+            lambda r: f"{r['bucket_name']} (กำหนดระยะเวลา)"
+            if r["bucket_kind"] == "term" else str(r["bucket_name"]),
+            axis=1,
+        )
+        _tbl8["ช่วงมูลค่าปลายปี (P10–P90)"] = _tbl8.apply(
+            lambda r: f"{r['eb_p10']:,.0f} – {r['eb_p90']:,.0f}", axis=1
+        )
+        # "จ่ายออก" split per child when available, else a single total column.
+        if _exp_child_cols8:
+            _child_rename8 = {
+                _cn: ("จ่าย: ผู้ปกครอง" if _cn == "Parent" else f"จ่าย: {_cn}")
+                for _cn in _exp_child_cols8
+            }
+            _exp_src8 = _exp_child_cols8
+            _exp_disp8 = [_child_rename8[_cn] for _cn in _exp_child_cols8]
+            _exp_rename8 = _child_rename8
+        else:
+            _exp_src8 = ["exp"]
+            _exp_disp8 = ["จ่ายออก"]
+            _exp_rename8 = {"exp": "จ่ายออก"}
+
+        # Column order follows the yearly flow:
+        # มูลค่าต้นปี + ออม + ผลตอบแทน − จ่าย ± rebalance = มูลค่าปลายปี
+        _disp8 = _tbl8[
+            ["year", "สินทรัพย์", "bb", "topup", "contrib", "ret"]
+            + _exp_src8
+            + ["rebalance_net", "eb", "ช่วงมูลค่าปลายปี (P10–P90)"]
+        ].rename(columns={
+            "year": "ปี",
+            "bb": "มูลค่าต้นปี",
+            "topup": "เงิน top-up",
+            "contrib": "ออมรายเดือน",
+            "ret": "ผลตอบแทนคาด",
+            "rebalance_net": "rebalance สุทธิ (+เติม/−ดึง)",
+            "eb": "มูลค่าปลายปี",
+            **_exp_rename8,
+        })
+        _money_cols8 = (
+            ["มูลค่าต้นปี", "เงิน top-up", "ออมรายเดือน", "ผลตอบแทนคาด"]
+            + _exp_disp8
+            + ["rebalance สุทธิ (+เติม/−ดึง)", "มูลค่าปลายปี"]
+        )
+        for _c in _money_cols8:
+            _disp8[_c] = _disp8[_c].round(0)
+        _sty8 = (
+            _disp8.style.format({_c: "{:,.0f}" for _c in _money_cols8})
+            .set_properties(**{"text-align": "right"}, subset=_money_cols8)
+        )
+        st.dataframe(_sty8, width="stretch", hide_index=True)
+        st.download_button(
+            "⬇ ดาวน์โหลดแนวทางการวางเงิน CSV",
+            _disp8.to_csv(index=False).encode("utf-8-sig"),
+            file_name="investment_guideline_per_year_asset.csv",
+            mime="text/csv",
+        )
+
+        # ── Term-asset risk note (buy-skip probability) ──
+        _skip8 = getattr(mc_result, "mc_term_skip_summary_df", None)
+        if (
+            _skip8 is not None and not _skip8.empty
+            and "skip_probability" in _skip8.columns
+        ):
+            _sk8 = _skip8[_skip8["skip_probability"] > 0]
+            if not _sk8.empty:
+                _msgs8 = [
+                    f"**{_r['term_name']}** (ซื้อปี {int(_r['buy_year'])}): "
+                    f"มีโอกาสซื้อไม่สำเร็จ {float(_r['skip_probability']) * 100:.0f}% ของ scenario"
+                    for _, _r in _sk8.iterrows()
+                ]
+                st.warning(
+                    "⚠️ ความเสี่ยงสินทรัพย์กำหนดระยะเวลา:\n\n- " + "\n- ".join(_msgs8)
+                )
+        st.caption(
+            "หมายเหตุ: ออมเข้า/จ่ายออกเป็นไปตามแผน (เท่ากันทุก scenario); "
+            "ผลตอบแทนและ rebalance เป็นค่าคาดหวังเฉลี่ย — ลูกค้าควรปรับสมดุลตามกฎ "
+            "(เติม bucket ระยะสั้นให้พอค่าใช้จ่ายปีถัดไป โดยดึงจาก bucket ระยะยาว)"
+        )
+    else:
+        st.info("ต้องเปิดเก็บรายละเอียดเส้นทาง (path detail) จึงจะสร้างแนวทางได้ — กรุณารัน Monte Carlo อีกครั้ง")
 
     # ── Charts 11 (Heatmap) and 12 (Drawdown trajectory) removed ──
 
