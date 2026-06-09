@@ -398,15 +398,24 @@ def render() -> dict:
         # customer's expense plan. Falls back to a 30-year window from the plan
         # start when the expense plan isn't available yet.
         _term_expense_df = st.session_state.get("expense_df")
+        _term_saving_df = st.session_state.get("saving_df")
         if (
             _term_expense_df is not None
             and not _term_expense_df.empty
             and "year" in _term_expense_df.columns
         ):
-            _plan_years = list(range(
-                int(_term_expense_df["year"].min()),
-                int(_term_expense_df["year"].max()) + 1,
-            ))
+            # First investable year = earliest of (saving start, expense start);
+            # money can be locked into a term during the saving phase too.
+            _exp_min = int(_term_expense_df["year"].min())
+            _exp_max = int(_term_expense_df["year"].max())
+            _starts = [_exp_min]
+            if (
+                _term_saving_df is not None
+                and not _term_saving_df.empty
+                and "year" in _term_saving_df.columns
+            ):
+                _starts.append(int(_term_saving_df["year"].min()))
+            _plan_years = list(range(min(_starts), _exp_max + 1))
         elif _term_start_year > 0:
             _plan_years = list(range(_term_start_year, _term_start_year + 30))
         else:
@@ -718,12 +727,23 @@ def render() -> dict:
                         _tt_t.insert(3, alt.Tooltip("age_start:Q", title="อายุเริ่ม", format="d"))
                         _tt_t.insert(4, alt.Tooltip("age_end:Q", title="อายุจบ", format="d"))
                     _n_child_t = _tl_t["child_name"].nunique()
+                    # Start the timeline x-axis at the earliest plan year
+                    # (min of saving / expense start) like the buy-year dropdown.
+                    _tl_x_start_t = (
+                        int(min(_plan_years)) if _plan_years
+                        else int(_tl_t["year_start"].min())
+                    )
+                    _tl_x_end_t = max(
+                        (int(max(_plan_years)) + 1) if _plan_years else 0,
+                        int(_tl_t["year_end_excl"].max()),
+                    )
                     _tl_chart_t = (
                         alt.Chart(_tl_t)
                         .mark_bar(cornerRadius=4, opacity=0.85)
                         .encode(
                             x=alt.X(
-                                "year_start:Q", title="ปี", scale=alt.Scale(zero=False),
+                                "year_start:Q", title="ปี",
+                                scale=alt.Scale(zero=False, domain=[_tl_x_start_t, _tl_x_end_t]),
                                 axis=alt.Axis(format="d", tickMinStep=1),
                             ),
                             x2=alt.X2("year_end_excl:Q"),
@@ -880,8 +900,18 @@ def render() -> dict:
                     ],
                 )
                 _plot_df = pd.concat(_chart_frames, ignore_index=True)
+                # Span the same x-axis range as the timeline above (earliest plan
+                # year = min saving/expense, through the last plan year), so the
+                # two charts in the expander line up.
+                _x_dom_cfg = (
+                    alt.Scale(domain=[int(min(_plan_years)), int(max(_plan_years)) + 1])
+                    if _plan_years else alt.Undefined
+                )
                 _base = alt.Chart(_plot_df).encode(
-                    x=alt.X("year:Q", title="ปี", axis=alt.Axis(format="d", tickMinStep=1)),
+                    x=alt.X(
+                        "year:Q", title="ปี", scale=_x_dom_cfg,
+                        axis=alt.Axis(format="d", tickMinStep=1),
+                    ),
                     y=alt.Y("value:Q", title="จำนวนเงิน (บาท)", axis=alt.Axis(format=",.0f")),
                     color=alt.Color("series:N", scale=_series_color_scale_cfg, title=""),
                 )
@@ -916,6 +946,12 @@ def render() -> dict:
                             y=alt.Y("low:Q"),
                             y2=alt.Y2("high:Q"),
                             color=alt.Color("series:N", scale=_series_color_scale_cfg, title=""),
+                            tooltip=[
+                                alt.Tooltip("series:N", title=""),
+                                alt.Tooltip("year:Q", title="ปี", format="d"),
+                                alt.Tooltip("low:Q", title="P10 (บาท)", format=",.0f"),
+                                alt.Tooltip("high:Q", title="P90 (บาท)", format=",.0f"),
+                            ],
                         )
                     )
                 _layers = ([_band_layer] if _band_layer is not None else []) + [_line, _data_labels]
