@@ -1,73 +1,73 @@
-﻿country,city,accom_thb,food_thb,transport_thb,utilities_thb,note,source
-TH,กรุงเทพมหานคร,12000,9000,2000,1000,หอพักใกล้มหาวิทยาลัย/คอนโดแบ่งเช่า — จุฬา เกษตร KMITL KMUTT KMUTNB UTCC SPU มศว และโรงเรียนนานาชาติส่วนใหญ่,https://www.numbeo.com/cost-of-living/in/Bangkok
-TH,นครปฐม,6500,7000,1500,900,มหิดล ศาลายา / MUIC / MWIT / ศิลปากร พระราชวังสนามจันทร์ — ค่าที่พักถูกกว่า กทม. 40-50%,https://www.numbeo.com/cost-of-living/in/Bangkok
-TH,ปทุมธานี,7500,7500,1500,950,ธรรมศาสตร์ รังสิต / ม.รังสิต / ม.กรุงเทพ / Bromsgrove — ที่พักใกล้รังสิตถูกกว่า กทม. ชั้นใน 30-40%,https://www.numbeo.com/cost-of-living/in/Bangkok
-TH,นนทบุรี,8500,8000,1800,950,ISB / DBS (Nichada Thani) — ปริมณฑลค่าครองชีพใกล้เคียง กทม. ชานเมือง,https://www.numbeo.com/cost-of-living/in/Bangkok
-TH,สมุทรปราการ,7500,7500,1700,900,ABAC บางนา / ACSP / Concordian / Verso — เขตอุตสาหกรรม ค่าที่พักถูกกว่า กทม. ชั้นใน,https://www.numbeo.com/cost-of-living/in/Bangkok
-TH,ชลบุรี,8000,7500,1600,1000,ม.บูรพา บางแสน / Regents Pattaya / Rugby School Thailand — ครอบคลุมทั้งบางแสนและพัทยา,https://www.numbeo.com/cost-of-living/in/Pattaya
-TH,ระยอง,6500,7000,1500,900,KVIS วังจันทร์วัลเลย์ — โรงเรียนประจำ ทุน 100% ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Bangkok
-TH,เชียงใหม่,6000,6500,1200,900,ม.เชียงใหม่ (CMU) — เมืองใหญ่ภาคเหนือ ค่าครองชีพถูกกว่า กทม. 30-40%,https://www.numbeo.com/cost-of-living/in/Chiang-Mai
-TH,ขอนแก่น,5000,6500,1000,800,ม.ขอนแก่น (KKU) — เมืองมหาวิทยาลัยภาคอีสาน ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Khon-Kaen
-TH,สงขลา,5500,6500,1100,800,ม.สงขลานครินทร์ (PSU หาดใหญ่) — ศูนย์กลางภาคใต้ ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Hat-Yai
-TH,พิษณุโลก,4500,6000,900,700,ม.นเรศวร — เมืองมหาวิทยาลัยภาคเหนือตอนล่าง ค่าครองชีพต่ำมาก,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Thailand
-TH,มหาสารคาม,4000,5500,800,700,ม.มหาสารคาม (MSU) — เมืองมหาวิทยาลัยภาคอีสาน ค่าครองชีพต่ำที่สุด,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Thailand
-US,"Cambridge, MA",75000,19500,3800,6800,MIT / Harvard — Greater Boston ค่าที่พักสูง อยู่กับเพื่อนหรือ on-campus dorm ลดได้,https://www.numbeo.com/cost-of-living/in/Cambridge-MA-United-States
-US,"Stanford, CA",95000,20500,3800,7500,Stanford University — Silicon Valley ค่าที่พักแพงที่สุดในอเมริกา,https://www.numbeo.com/cost-of-living/in/Palo-Alto
-US,"Pasadena, CA",68000,19000,3400,6100,Caltech — เมืองชานเมือง Los Angeles ค่าครองชีพสูง,https://www.numbeo.com/cost-of-living/in/Pasadena-CA-United-States
-US,"Princeton, NJ",61000,18700,3200,6100,Princeton University — เมืองเล็กชานเมือง ค่าที่พักสูงเพราะอุปสงค์ Ivy League,https://www.numbeo.com/cost-of-living/in/Princeton-NJ-United-States
-US,"New Haven, CT",51000,17000,3000,5800,Yale University — เมืองมหาวิทยาลัย ค่าที่พักปานกลางสำหรับ Ivy,https://www.numbeo.com/cost-of-living/in/New-Haven-CT-United-States
-US,"New York, NY",85000,22000,4500,7500,Columbia / NYU — มหานครค่าครองชีพสูงสุด ดูห้อง shared / dorm จะถูกลง 30-40%,https://www.numbeo.com/cost-of-living/in/New-York
-US,"Philadelphia, PA",51000,17000,3300,6100,University of Pennsylvania (UPenn) — เมืองใหญ่ฝั่งตะวันออก ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Philadelphia
-US,"Ithaca, NY",41000,17000,2700,5100,Cornell University — เมืองมหาวิทยาลัยขนาดเล็ก ค่าครองชีพต่ำกว่าค่าเฉลี่ย,https://www.numbeo.com/cost-of-living/in/Ithaca-NY-United-States
-US,"Providence, RI",54000,17000,2700,5800,Brown University — เมืองมหาวิทยาลัยใน New England ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Providence-RI-United-States
-US,"Hanover, NH",48000,18700,3000,6100,Dartmouth College — เมืองชนบทเล็ก ค่าที่พักสูงเพราะอุปสงค์,https://www.numbeo.com/cost-of-living/country_result.jsp?country=United+States
-US,"Evanston, IL",58000,18700,3500,5800,Northwestern University — ชานเมือง Chicago ค่าครองชีพปานกลาง-สูง,https://www.numbeo.com/cost-of-living/in/Evanston-IL-United-States
-US,"Durham, NC",44000,17000,2400,5400,Duke University — เมืองมหาวิทยาลัยภาคใต้ ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Durham-NC-United-States
-US,"Baltimore, MD",51000,17000,3200,5800,Johns Hopkins University — เมืองใหญ่ ค่าที่พักปานกลาง,https://www.numbeo.com/cost-of-living/in/Baltimore
-US,"Chicago, IL",58000,18700,3500,5800,University of Chicago (UChicago) — เมืองใหญ่ Midwest ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Chicago
-US,"Los Angeles, CA",78000,20500,3700,6500,UCLA / USC — เมืองใหญ่ที่สอง ค่าที่พักสูงรองจาก SF/NYC,https://www.numbeo.com/cost-of-living/in/Los-Angeles
-US,"Berkeley, CA",82000,20500,3200,6100,UC Berkeley — Bay Area ค่าที่พักใกล้เคียง San Francisco,https://www.numbeo.com/cost-of-living/in/Berkeley-CA-United-States
-US,"Ann Arbor, MI",48000,17000,3000,5800,University of Michigan-Ann Arbor — เมืองมหาวิทยาลัย ค่าครองชีพต่ำกว่าค่าเฉลี่ย,https://www.numbeo.com/cost-of-living/in/Ann-Arbor-MI-United-States
-US,National Average,50000,17000,3000,5500,ค่าเฉลี่ยทั่วประเทศ — US Public/Private Schools และ Boarding Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=United+States
-UK,Oxford,47000,13000,3200,7300,University of Oxford — เมืองมหาวิทยาลัยเก่าแก่ ค่าที่พักสูงกว่าค่าเฉลี่ย UK,https://www.numbeo.com/cost-of-living/in/Oxford
-UK,Cambridge,47000,13000,3200,7300,University of Cambridge — เมืองมหาวิทยาลัย ค่าที่พักสูงคล้าย Oxford,https://www.numbeo.com/cost-of-living/in/Cambridge
-UK,London,65000,17000,7300,7700,"Imperial / UCL / LSE / KCL / LBS — มหานครค่าครองชีพสูงสุด UK, Travelcard Zone 1-2 จำเป็น",https://www.numbeo.com/cost-of-living/in/London
-UK,Edinburgh,37000,13000,3000,6900,University of Edinburgh — เมืองหลวงสก็อตแลนด์ ค่าครองชีพต่ำกว่าลอนดอน 30-40%,https://www.numbeo.com/cost-of-living/in/Edinburgh
-UK,Manchester,34000,12000,3000,6500,University of Manchester — เมืองใหญ่ทางเหนือ ค่าครองชีพต่ำที่สุดในกลุ่ม Russell Group,https://www.numbeo.com/cost-of-living/in/Manchester
-UK,National Average,40000,13000,3500,7000,ค่าเฉลี่ยทั่วประเทศ — UK State/Independent Day/Boarding Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=United+Kingdom
-CH,Zurich,65000,23000,3600,7600,ETH Zurich — เมืองค่าครองชีพสูงสุดในยุโรป ที่พักหายากมาก,https://www.numbeo.com/cost-of-living/in/Zurich
-CH,Lausanne,57000,21000,3000,7200,EPFL — เมืองค่าครองชีพสูงรองจาก Zurich,https://www.numbeo.com/cost-of-living/in/Lausanne
-DE,Munich,41000,13000,2200,8100,TU Munich / LMU Munich — เมืองค่าครองชีพสูงที่สุดในเยอรมนี,https://www.numbeo.com/cost-of-living/in/Munich
-DE,Heidelberg,26000,11000,1900,6700,Heidelberg University — เมืองมหาวิทยาลัยขนาดกลาง ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Heidelberg
-DE,National Average,30000,11000,2000,7000,ค่าเฉลี่ยทั่วประเทศ — Germany Public/Private/Intl Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Germany
-FR,Paris,44000,15000,3100,6700,"HEC Paris / Sciences Po / PSL / Sorbonne — มหานครค่าที่พักสูง, Navigo monthly pass ครอบคลุม Île-de-France",https://www.numbeo.com/cost-of-living/in/Paris
-FR,National Average,30000,12000,2000,6000,ค่าเฉลี่ยทั่วประเทศ — France Public/Private/Intl Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=France
-NL,Delft,33000,13000,2800,6700,TU Delft — เมืองมหาวิทยาลัยเล็ก ใกล้ The Hague ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Delft
-NL,Amsterdam,56000,15000,3300,6700,University of Amsterdam — เมืองหลวงค่าที่พักสูง การหาห้องนักศึกษาแข่งขันสูงมาก,https://www.numbeo.com/cost-of-living/in/Amsterdam
-NL,National Average,40000,13000,2800,6500,ค่าเฉลี่ยทั่วประเทศ — Netherlands Public/Private/Intl Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Netherlands
-IT,Milan,41000,15000,1400,7000,Bocconi University / SDA Bocconi MBA — เมืองธุรกิจค่าครองชีพสูงสุดในอิตาลี,https://www.numbeo.com/cost-of-living/in/Milan
-SE,Stockholm,31000,12000,3200,2400,Karolinska Institutet — เมืองหลวงค่าครองชีพสูง สาธารณูปโภครวมในค่าเช่าส่วนใหญ่,https://www.numbeo.com/cost-of-living/in/Stockholm
-BE,Leuven,22000,11000,1900,5600,KU Leuven — เมืองมหาวิทยาลัยเล็ก ค่าครองชีพต่ำที่สุดในกลุ่มยุโรปตะวันตก,https://www.numbeo.com/cost-of-living/in/Leuven
-IE,Dublin,63000,15000,4100,6300,Trinity College Dublin — เมืองหลวงค่าที่พักสูงมาก วิกฤตที่พักนักศึกษา,https://www.numbeo.com/cost-of-living/in/Dublin
-CN,Beijing,18800,8500,1000,1800,Tsinghua / Peking / Renmin / Beijing Normal / Beihang — หอพักในมหาวิทยาลัยถูกมาก,https://www.numbeo.com/cost-of-living/in/Beijing
-CN,Shanghai,21200,9400,1000,1900,Fudan / SJTU / Tongji — เมืองค่าครองชีพสูงสุดในจีน,https://www.numbeo.com/cost-of-living/in/Shanghai
-CN,Hangzhou,14100,8000,900,1800,Zhejiang University — เมืองเทคโนโลยี ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Hangzhou
-CN,Nanjing,12700,7500,800,1700,Nanjing University / Southeast University — เมืองมหาวิทยาลัยเก่าแก่ ค่าครองชีพต่ำกว่า Tier-1,https://www.numbeo.com/cost-of-living/in/Nanjing
-CN,Hefei,10300,6600,800,1500,USTC (University of Science and Technology of China) — เมืองค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Hefei
-CN,Wuhan,11800,7100,800,1600,Wuhan University / HUST — เมืองมหาวิทยาลัยใหญ่ภาคกลาง ค่าครองชีพปานกลาง-ต่ำ,https://www.numbeo.com/cost-of-living/in/Wuhan
-CN,Guangzhou,16500,8500,1000,1800,Sun Yat-sen University — เมือง Tier-1 ภาคใต้ ค่าครองชีพต่ำกว่า BJ/SH,https://www.numbeo.com/cost-of-living/in/Guangzhou
-CN,Harbin,10300,6600,700,1500,Harbin Institute of Technology (HIT) — เมืองภาคเหนือ ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Harbin
-CN,Xi'an,10300,6600,800,1500,Xi'an Jiaotong University — เมืองประวัติศาสตร์ ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Xian
-CN,Tianjin,13200,7100,800,1600,Nankai University / Tianjin University — Tier-1.5 ใกล้ปักกิ่ง,https://www.numbeo.com/cost-of-living/in/Tianjin
-CN,Chengdu,11800,7100,800,1600,Sichuan University — เมืองภาคตะวันตกเฉียงใต้ ค่าครองชีพปานกลาง-ต่ำ,https://www.numbeo.com/cost-of-living/in/Chengdu
-CN,National Average,13000,7500,900,1600,ค่าเฉลี่ยทั่วประเทศ — China Public/Intl Private Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=China
-AU,Canberra,33000,9900,2400,4400,Australian National University (ANU) — เมืองหลวงค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Canberra
-AU,Melbourne,37400,11000,3700,4400,University of Melbourne / Monash / RMIT / Deakin / La Trobe — เมืองมหาวิทยาลัยใหญ่,https://www.numbeo.com/cost-of-living/in/Melbourne
-AU,Sydney,41800,12100,4600,4800,University of Sydney / UNSW / UTS / Macquarie — ค่าที่พักสูงสุดในออสเตรเลีย,https://www.numbeo.com/cost-of-living/in/Sydney
-AU,Brisbane,33000,9900,3500,4200,University of Queensland (UQ) / Griffith / QUT — เมือง Queensland ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Brisbane
-AU,Perth,33000,9900,3500,4200,University of Western Australia (UWA) / Curtin / Murdoch — ค่าครองชีพปานกลาง,https://www.numbeo.com/cost-of-living/in/Perth
-AU,Adelaide,28600,8800,2600,4000,University of Adelaide — เมืองมหาวิทยาลัยค่าครองชีพต่ำกว่า Sydney/Melbourne 20-30%,https://www.numbeo.com/cost-of-living/in/Adelaide
-AU,Wollongong,26400,8800,2200,3700,University of Wollongong (UOW) — เมืองมหาวิทยาลัยติดทะเล ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Wollongong
-AU,Newcastle,28600,8800,2200,3700,University of Newcastle — เมืองมหาวิทยาลัยภาคเหนือ NSW ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Newcastle-Australia
-AU,Hobart,26400,8800,2200,3700,University of Tasmania (UTAS) — เมืองเล็กในแทสเมเนีย ค่าครองชีพต่ำสุดใน Go8 cities,https://www.numbeo.com/cost-of-living/in/Hobart
-AU,National Average,33000,10000,2800,4300,ค่าเฉลี่ยทั่วประเทศ — Australia Government/Independent Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Australia
+﻿country,city,currency,accom_local_year,food_local_year,transport_local_year,utilities_local_year,total_local_year,note,source
+TH,กรุงเทพมหานคร,THB,144000,108000,24000,12000,288000,หอพักใกล้มหาวิทยาลัย/คอนโดแบ่งเช่า — จุฬา เกษตร KMITL KMUTT KMUTNB UTCC SPU มศว และโรงเรียนนานาชาติส่วนใหญ่,https://www.numbeo.com/cost-of-living/in/Bangkok
+TH,นครปฐม,THB,78000,84000,18000,10800,190800,มหิดล ศาลายา / MUIC / MWIT / ศิลปากร — อ้างอิงเขตกรุงเทพฯ-ปริมณฑล ค่าที่พักถูกกว่า กทม. 40-50%,https://www.numbeo.com/cost-of-living/in/Bangkok
+TH,ปทุมธานี,THB,90000,90000,18000,11400,209400,ธรรมศาสตร์รังสิต / ม.รังสิต / ม.กรุงเทพ / Bromsgrove — อ้างอิงเขตกรุงเทพฯ-ปริมณฑล ถูกกว่า กทม. ชั้นใน 30-40%,https://www.numbeo.com/cost-of-living/in/Bangkok
+TH,นนทบุรี,THB,102000,96000,21600,11400,231000,ISB / DBS (Nichada Thani) — อ้างอิงเขตกรุงเทพฯ-ปริมณฑล,https://www.numbeo.com/cost-of-living/in/Bangkok
+TH,สมุทรปราการ,THB,90000,90000,20400,10800,211200,ABAC บางนา / ACSP / Concordian / Verso — อ้างอิงเขตกรุงเทพฯ-ปริมณฑล,https://www.numbeo.com/cost-of-living/in/Bangkok
+TH,ชลบุรี,THB,96000,90000,19200,12000,217200,ม.บูรพา บางแสน / Regents Pattaya / Rugby School Thailand — อ้างอิงข้อมูลพัทยา,https://www.numbeo.com/cost-of-living/in/Pattaya
+TH,ระยอง,THB,78000,84000,18000,10800,190800,KVIS วังจันทร์วัลเลย์ — โรงเรียนประจำ ทุน 100% อ้างอิงเขตกรุงเทพฯ-ปริมณฑล,https://www.numbeo.com/cost-of-living/in/Bangkok
+TH,เชียงใหม่,THB,72000,78000,14400,10800,175200,ม.เชียงใหม่ (CMU) — เมืองใหญ่ภาคเหนือ ถูกกว่า กทม. 30-40%,https://www.numbeo.com/cost-of-living/in/Chiang-Mai
+TH,ขอนแก่น,THB,60000,78000,12000,9600,159600,ม.ขอนแก่น (KKU) — เมืองมหาวิทยาลัยภาคอีสาน ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Khon-Kaen
+TH,สงขลา,THB,66000,78000,13200,9600,166800,ม.สงขลานครินทร์ (PSU หาดใหญ่) — ศูนย์กลางภาคใต้ ค่าครองชีพต่ำ (Numbeo ใช้หน้าประเทศ),https://www.numbeo.com/cost-of-living/country_result.jsp?country=Thailand
+TH,พิษณุโลก,THB,54000,72000,10800,8400,145200,ม.นเรศวร — เมืองมหาวิทยาลัยภาคเหนือตอนล่าง ค่าครองชีพต่ำมาก (Numbeo ใช้หน้าประเทศ),https://www.numbeo.com/cost-of-living/country_result.jsp?country=Thailand
+TH,มหาสารคาม,THB,48000,66000,9600,8400,132000,ม.มหาสารคาม (MSU) — ค่าครองชีพต่ำที่สุดในกลุ่ม (Numbeo ใช้หน้าประเทศ),https://www.numbeo.com/cost-of-living/country_result.jsp?country=Thailand
+US,"Cambridge, MA",USD,26471,6882,1341,2400,37094,MIT / Harvard — Greater Boston ค่าที่พักสูง on-campus dorm ลดได้,https://www.numbeo.com/cost-of-living/in/Cambridge-MA-United-States
+US,"Stanford, CA",USD,33529,7235,1341,2647,44752,Stanford University — Silicon Valley ค่าที่พักแพงสุด (อ้างอิง Palo Alto),https://www.numbeo.com/cost-of-living/in/Palo-Alto
+US,"Pasadena, CA",USD,24000,6706,1200,2153,34059,Caltech — ชานเมือง Los Angeles ค่าครองชีพสูง,https://www.numbeo.com/cost-of-living/in/Pasadena-CA-United-States
+US,"Princeton, NJ",USD,21529,6600,1129,2153,31411,Princeton University — เมืองเล็กชานเมือง อุปสงค์ Ivy League สูง,https://www.numbeo.com/cost-of-living/in/Princeton
+US,"New Haven, CT",USD,18000,6000,1059,2047,27106,Yale University — เมืองมหาวิทยาลัย ค่าที่พักปานกลางสำหรับ Ivy,https://www.numbeo.com/cost-of-living/in/New-Haven
+US,"New York, NY",USD,30000,7765,1588,2647,42000,Columbia / NYU — มหานครค่าครองชีพสูงสุด shared/dorm ถูกลง 30-40%,https://www.numbeo.com/cost-of-living/in/New-York
+US,"Philadelphia, PA",USD,18000,6000,1165,2153,27318,University of Pennsylvania (UPenn) — เมืองใหญ่ฝั่งตะวันออก ปานกลาง,https://www.numbeo.com/cost-of-living/in/Philadelphia
+US,"Ithaca, NY",USD,14471,6000,953,1800,23224,Cornell University — เมืองมหาวิทยาลัยขนาดเล็ก ต่ำกว่าค่าเฉลี่ย,https://www.numbeo.com/cost-of-living/in/Ithaca-NY-United-States
+US,"Providence, RI",USD,19059,6000,953,2047,28059,Brown University — เมืองมหาวิทยาลัยใน New England ปานกลาง,https://www.numbeo.com/cost-of-living/in/Providence-RI-United-States
+US,"Hanover, NH",USD,16941,6600,1059,2153,26753,Dartmouth College — เมืองชนบทเล็ก ค่าที่พักสูงเพราะอุปสงค์,https://www.numbeo.com/cost-of-living/in/Hanover-NH-United-States
+US,"Evanston, IL",USD,20471,6600,1235,2047,30353,Northwestern University — ชานเมือง Chicago ปานกลาง-สูง,https://www.numbeo.com/cost-of-living/in/Evanston-IL-United-States
+US,"Durham, NC",USD,15529,6000,847,1906,24282,Duke University — เมืองมหาวิทยาลัยภาคใต้ ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Durham-NC-United-States
+US,"Baltimore, MD",USD,18000,6000,1129,2047,27176,Johns Hopkins University — เมืองใหญ่ ค่าที่พักปานกลาง,https://www.numbeo.com/cost-of-living/in/Baltimore
+US,"Chicago, IL",USD,20471,6600,1235,2047,30353,University of Chicago (UChicago) — เมืองใหญ่ Midwest ปานกลาง,https://www.numbeo.com/cost-of-living/in/Chicago
+US,"Los Angeles, CA",USD,27529,7235,1306,2294,38364,UCLA / USC — เมืองใหญ่ที่สอง ค่าที่พักสูงรองจาก SF/NYC,https://www.numbeo.com/cost-of-living/in/Los-Angeles
+US,"Berkeley, CA",USD,28941,7235,1129,2153,39458,UC Berkeley — Bay Area ค่าที่พักใกล้เคียง San Francisco,https://www.numbeo.com/cost-of-living/in/Berkeley-CA-United-States
+US,"Ann Arbor, MI",USD,16941,6000,1059,2047,26047,University of Michigan-Ann Arbor — เมืองมหาวิทยาลัย ต่ำกว่าค่าเฉลี่ย,https://www.numbeo.com/cost-of-living/in/Ann-Arbor
+US,National Average,USD,17647,6000,1059,1941,26647,ค่าเฉลี่ยทั่วประเทศ — US Public/Private/Boarding Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=United+States
+UK,Oxford,GBP,13116,3628,893,2037,19674,University of Oxford — เมืองมหาวิทยาลัยเก่าแก่ ค่าที่พักสูงกว่าค่าเฉลี่ย UK,https://www.numbeo.com/cost-of-living/in/Oxford
+UK,Cambridge,GBP,13116,3628,893,2037,19674,University of Cambridge — เมืองมหาวิทยาลัย ค่าที่พักสูงคล้าย Oxford,https://www.numbeo.com/cost-of-living/in/Cambridge
+UK,London,GBP,18140,4744,2037,2149,27070,Imperial / UCL / LSE / KCL / LBS — มหานครค่าครองชีพสูงสุด Travelcard Zone 1-2,https://www.numbeo.com/cost-of-living/in/London
+UK,Edinburgh,GBP,10326,3628,837,1926,16717,University of Edinburgh — เมืองหลวงสก็อตแลนด์ ต่ำกว่าลอนดอน 30-40%,https://www.numbeo.com/cost-of-living/in/Edinburgh
+UK,Manchester,GBP,9488,3349,837,1814,15488,University of Manchester — เมืองใหญ่ทางเหนือ ต่ำสุดในกลุ่ม Russell Group,https://www.numbeo.com/cost-of-living/in/Manchester
+UK,National Average,GBP,11163,3628,977,1953,17721,ค่าเฉลี่ยทั่วประเทศ — UK State/Independent Day/Boarding Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=United+Kingdom
+CH,Zurich,CHF,20000,7077,1108,2338,30523,ETH Zurich — เมืองค่าครองชีพสูงสุดในยุโรป ที่พักหายากมาก,https://www.numbeo.com/cost-of-living/in/Zurich
+CH,Lausanne,CHF,17538,6462,923,2215,27138,EPFL — เมืองค่าครองชีพสูงรองจาก Zurich,https://www.numbeo.com/cost-of-living/in/Lausanne
+DE,Munich,EUR,13297,4216,714,2627,20854,TU Munich / LMU Munich — เมืองค่าครองชีพสูงที่สุดในเยอรมนี,https://www.numbeo.com/cost-of-living/in/Munich
+DE,Heidelberg,EUR,8432,3568,616,2173,14789,Heidelberg University — เมืองมหาวิทยาลัยขนาดกลาง ปานกลาง,https://www.numbeo.com/cost-of-living/in/Heidelberg
+DE,National Average,EUR,9730,3568,649,2270,16217,ค่าเฉลี่ยทั่วประเทศ — Germany Public/Private/Intl Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Germany
+FR,Paris,EUR,14270,4865,1005,2173,22313,HEC / Sciences Po / PSL / Sorbonne — มหานคร Navigo pass ครอบคลุม Île-de-France,https://www.numbeo.com/cost-of-living/in/Paris
+FR,National Average,EUR,9730,3892,649,1946,16217,ค่าเฉลี่ยทั่วประเทศ — France Public/Private/Intl Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=France
+NL,Delft,EUR,10703,4216,908,2173,18000,TU Delft — เมืองมหาวิทยาลัยเล็ก ใกล้ The Hague ปานกลาง,https://www.numbeo.com/cost-of-living/in/Delft
+NL,Amsterdam,EUR,18162,4865,1070,2173,26270,University of Amsterdam — เมืองหลวงค่าที่พักสูง หาห้องแข่งขันสูงมาก,https://www.numbeo.com/cost-of-living/in/Amsterdam
+NL,National Average,EUR,12973,4216,908,2108,20205,ค่าเฉลี่ยทั่วประเทศ — Netherlands Public/Private/Intl Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Netherlands
+IT,Milan,EUR,13297,4865,454,2270,20886,Bocconi University / SDA Bocconi MBA — เมืองธุรกิจค่าครองชีพสูงสุดในอิตาลี,https://www.numbeo.com/cost-of-living/in/Milan
+SE,Stockholm,SEK,112727,43636,11636,8727,176726,Karolinska Institutet — เมืองหลวง สาธารณูปโภครวมในค่าเช่าส่วนใหญ่,https://www.numbeo.com/cost-of-living/in/Stockholm
+BE,Leuven,EUR,7135,3568,616,1816,13135,KU Leuven — เมืองมหาวิทยาลัยเล็ก ต่ำที่สุดในกลุ่มยุโรปตะวันตก,https://www.numbeo.com/cost-of-living/in/Leuven
+IE,Dublin,EUR,20432,4865,1330,2043,28670,Trinity College Dublin — เมืองหลวงค่าที่พักสูงมาก วิกฤตที่พักนักศึกษา,https://www.numbeo.com/cost-of-living/in/Dublin
+CN,Beijing,CNY,48000,21702,2553,4596,76851,Tsinghua / Peking / Renmin / Beijing Normal / Beihang — หอพักในมหาวิทยาลัยถูกมาก,https://www.numbeo.com/cost-of-living/in/Beijing
+CN,Shanghai,CNY,54128,24000,2553,4851,85532,Fudan / SJTU / Tongji — เมืองค่าครองชีพสูงสุดในจีน,https://www.numbeo.com/cost-of-living/in/Shanghai
+CN,Hangzhou,CNY,36000,20426,2298,4596,63320,Zhejiang University — เมืองเทคโนโลยี ปานกลาง,https://www.numbeo.com/cost-of-living/in/Hangzhou
+CN,Nanjing,CNY,32426,19149,2043,4340,57958,Nanjing University / Southeast University — เมืองเก่าแก่ ต่ำกว่า Tier-1,https://www.numbeo.com/cost-of-living/in/Nanjing
+CN,Hefei,CNY,26298,16851,2043,3830,49022,USTC — เมืองค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Hefei
+CN,Wuhan,CNY,30128,18128,2043,4085,54384,Wuhan University / HUST — เมืองใหญ่ภาคกลาง ปานกลาง-ต่ำ,https://www.numbeo.com/cost-of-living/in/Wuhan
+CN,Guangzhou,CNY,42128,21702,2553,4596,70979,Sun Yat-sen University — Tier-1 ภาคใต้ ต่ำกว่า BJ/SH,https://www.numbeo.com/cost-of-living/in/Guangzhou
+CN,Harbin,CNY,26298,16851,1787,3830,48766,Harbin Institute of Technology (HIT) — เมืองภาคเหนือ ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Harbin
+CN,Xi'an,CNY,26298,16851,2043,3830,49022,Xi'an Jiaotong University — เมืองประวัติศาสตร์ ค่าครองชีพต่ำ (Numbeo ใช้หน้าประเทศ),https://www.numbeo.com/cost-of-living/country_result.jsp?country=China
+CN,Tianjin,CNY,33702,18128,2043,4085,57958,Nankai University / Tianjin University — Tier-1.5 ใกล้ปักกิ่ง,https://www.numbeo.com/cost-of-living/in/Tianjin
+CN,Chengdu,CNY,30128,18128,2043,4085,54384,Sichuan University — ภาคตะวันตกเฉียงใต้ ปานกลาง-ต่ำ,https://www.numbeo.com/cost-of-living/in/Chengdu
+CN,National Average,CNY,33191,19149,2298,4085,58723,ค่าเฉลี่ยทั่วประเทศ — China Public/Intl Private Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=China
+AU,Canberra,AUD,18000,5400,1309,2400,27109,Australian National University (ANU) — เมืองหลวง ปานกลาง,https://www.numbeo.com/cost-of-living/in/Canberra
+AU,Melbourne,AUD,20400,6000,2018,2400,30818,University of Melbourne / Monash / RMIT / Deakin / La Trobe — เมืองมหาวิทยาลัยใหญ่,https://www.numbeo.com/cost-of-living/in/Melbourne
+AU,Sydney,AUD,22800,6600,2509,2618,34527,University of Sydney / UNSW / UTS / Macquarie — ค่าที่พักสูงสุดในออสเตรเลีย,https://www.numbeo.com/cost-of-living/in/Sydney
+AU,Brisbane,AUD,18000,5400,1909,2291,27600,University of Queensland (UQ) / Griffith / QUT — เมือง Queensland ปานกลาง,https://www.numbeo.com/cost-of-living/in/Brisbane
+AU,Perth,AUD,18000,5400,1909,2291,27600,University of Western Australia (UWA) / Curtin / Murdoch — ปานกลาง,https://www.numbeo.com/cost-of-living/in/Perth
+AU,Adelaide,AUD,15600,4800,1418,2182,24000,University of Adelaide — ต่ำกว่า Sydney/Melbourne 20-30%,https://www.numbeo.com/cost-of-living/in/Adelaide
+AU,Wollongong,AUD,14400,4800,1200,2018,22418,University of Wollongong (UOW) — เมืองมหาวิทยาลัยติดทะเล ค่าครองชีพต่ำ,https://www.numbeo.com/cost-of-living/in/Wollongong
+AU,Newcastle,AUD,15600,4800,1200,2018,23618,University of Newcastle — ภาคเหนือ NSW ค่าครองชีพต่ำ (Numbeo ใช้หน้าประเทศ),https://www.numbeo.com/cost-of-living/country_result.jsp?country=Australia
+AU,Hobart,AUD,14400,4800,1200,2018,22418,University of Tasmania (UTAS) — เมืองเล็กในแทสเมเนีย ต่ำสุดใน Go8 cities,https://www.numbeo.com/cost-of-living/in/Hobart
+AU,National Average,AUD,18000,5455,1527,2345,27327,ค่าเฉลี่ยทั่วประเทศ — Australia Government/Independent Schools ที่ไม่ระบุเมือง,https://www.numbeo.com/cost-of-living/country_result.jsp?country=Australia
