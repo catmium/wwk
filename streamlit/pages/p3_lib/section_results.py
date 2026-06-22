@@ -17,7 +17,6 @@ import pandas as pd
 import altair as alt
 
 from strings import S, edu_level_label
-from portfolio_bucket_engine_mc import DEFAULT_INTRA_BUCKET_CORRELATION
 
 from .helpers import (
     fmt_money as _fmt_money,
@@ -27,6 +26,16 @@ from .helpers import (
     term_fingerprint as _term_fingerprint,
     analyze_mc_result as analyze_mc_result_local,
 )
+
+
+def _ordered_children(expense_df) -> list:
+    """Child names in first-appearance order, with 'Parent' pushed to the end."""
+    _seen, _order = set(), []
+    for _n in expense_df["child_name"].astype(str).tolist():
+        if _n not in _seen:
+            _seen.add(_n)
+            _order.append(_n)
+    return [n for n in _order if n != "Parent"] + [n for n in _order if n == "Parent"]
 
 
 def render(
@@ -44,8 +53,6 @@ def render(
 ) -> None:
     """Render Section 6 results. Reads MC result from session_state."""
 
-    _new_defs = new_defs  # alias used by extracted body
-
     if not (
         st.session_state.get("inv_investment_sim_done")
         and st.session_state.get("inv_mc_result") is not None
@@ -60,7 +67,7 @@ def render(
     #       initial_savings / monthly_contribution / topups, re-ran Page 2)
     _stale_msgs: list[str] = []
 
-    _current_bucket_fp = _bucket_fingerprint(_new_defs)
+    _current_bucket_fp = _bucket_fingerprint(new_defs)
     _saved_bucket_fp = st.session_state.get("inv_mc_fingerprint")
     if _saved_bucket_fp is not None and _saved_bucket_fp != _current_bucket_fp:
         _stale_msgs.append(
@@ -99,21 +106,12 @@ def render(
     bucket_summary_df = analysis["bucket_summary_df"]
     year_summary_df = analysis["year_summary_df"]
     path_summary_df = analysis["path_summary_df"]
-    weakest_bucket_row = analysis["weakest_bucket_row"]
     riskiest_years_df = analysis["riskiest_years_df"]
     worst_paths_df = analysis["worst_paths_df"]
     terminal_balance_pivot = analysis["terminal_balance_pivot"]
     shortfall_probability_pivot = analysis["shortfall_probability_pivot"]
 
-    # Anchor for results section (visual marker only — auto-scroll removed
-    # because st.components.v1.html is being removed after 2026-06-01 and
-    # st.html() does not execute scripts. Results render directly below the
-    # Run button so manual scrolling is minimal.)
-    st.markdown('<div id="mc-results-anchor"></div>', unsafe_allow_html=True)
     st.subheader(S("p3", "sec6_header"))
-    # Consume the one-shot flag (no-op now — kept so existing setters don't
-    # leave stale flags in session_state).
-    st.session_state.pop("_p3_scroll_to_results", False)
 
     # ── Term-asset purchase-skip warning ──────────────────────────────────
     # Surface scenarios where a term asset could NOT be bought because the
@@ -137,25 +135,6 @@ def render(
                 "⚠️ **Term asset บางตัวซื้อไม่สำเร็จในบาง scenario:**\n\n- "
                 + "\n- ".join(_skip_msgs)
             )
-
-    # Compact currency formatter used by every chart in this section.
-    # Defined here so it's in scope even when individual data frames are empty.
-    def _fmt_c(v):
-        try:
-            v = float(v)
-            if abs(v) >= 1_000_000:
-                return f"{v/1_000_000:.1f}M"
-            if abs(v) >= 1_000:
-                return f"{v/1_000:.0f}K"
-            return f"{v:,.0f}"
-        except Exception:
-            return ""
-
-    # ── Simulation Diagnostic expander hidden (kept block-wrapped for easy
-    # re-enable: flip to `if True:` and the content renders inline; flip back
-    # to `with st.expander(...)` to restore the original card). ──
-    if False:
-        pass
 
     # ── Status banner + headline KPIs share one bordered container ──
     if not engine_summary_df.empty:
@@ -386,7 +365,7 @@ def render(
 
     # B7: shared bucket palette — ใช้ตรงกันทั้ง P50 balance, shortfall line, และ allocation evolution
     _bucket_color_range = ["#60a5fa", "#34d399", "#f97316"]
-    _bucket_domain = [str(d["name"]) for d in _new_defs]
+    _bucket_domain = [str(d["name"]) for d in new_defs]
     _bucket_color_scale = alt.Scale(
         domain=_bucket_domain,
         range=_bucket_color_range[:len(_bucket_domain)] if _bucket_domain else _bucket_color_range,
@@ -456,7 +435,6 @@ def render(
             chart_df["p90_beginning_balance"]  = chart_df["p90_ending_balance"]
             chart_df["mean_beginning_balance"] = chart_df["p50_ending_balance"]
 
-        chart_df["p50_label"]  = chart_df["p50_ending_balance"].apply(_fmt_c)
         chart_df["mean_label"] = chart_df["mean_beginning_balance"].apply(_fmt_c)
         chart_df["sf_label"]   = chart_df["shortfall_probability"].apply(lambda x: f"{float(x):.1%}")
     else:
@@ -592,17 +570,16 @@ def render(
     # the selected scope (total incl. term, a single liquid bucket, or a single
     # term asset). Using actual investment_return keeps the term payout year
     # (return = 0) from distorting the figure.
-    _c3_full = _path_detail_full
     if (
-        _c3_full is not None
-        and not _c3_full.empty
-        and {"path_id", "investment_return", "beginning_balance", "bucket_kind", "bucket_name"}.issubset(_c3_full.columns)
+        _path_detail_full is not None
+        and not _path_detail_full.empty
+        and {"path_id", "investment_return", "beginning_balance", "bucket_kind", "bucket_name"}.issubset(_path_detail_full.columns)
     ):
         st.markdown("#### 3. 📈 ผลตอบแทนต่อปีที่เกิดขึ้นจริง (Annualized Return)")
         st.caption("ผลตอบแทนต่อปีที่แต่ละ simulation ทำได้")
 
-        _b0_c3 = str(_new_defs[0]["name"]) if len(_new_defs) >= 1 else None
-        _b1_c3 = str(_new_defs[1]["name"]) if len(_new_defs) >= 2 else None
+        _b0_c3 = str(new_defs[0]["name"]) if len(new_defs) >= 1 else None
+        _b1_c3 = str(new_defs[1]["name"]) if len(new_defs) >= 2 else None
         _C3_TOTAL = "ภาพรวมผลตอบแทน"
         _c3_opts = [_C3_TOTAL]
         if _b0_c3:
@@ -630,17 +607,17 @@ def render(
         )
 
         if _c3_sel == _C3_TOTAL:
-            _c3_sub = _c3_full
+            _c3_sub = _path_detail_full
         elif _c3_sel.startswith("Term: "):
             _c3_nm = _c3_sel[len("Term: "):]
-            _c3_sub = _c3_full[
-                (_c3_full["bucket_kind"] == "term")
-                & (_c3_full["bucket_name"].astype(str) == _c3_nm)
+            _c3_sub = _path_detail_full[
+                (_path_detail_full["bucket_kind"] == "term")
+                & (_path_detail_full["bucket_name"].astype(str) == _c3_nm)
             ]
         else:
-            _c3_sub = _c3_full[
-                (_c3_full["bucket_kind"] == "liquid")
-                & (_c3_full["bucket_name"].astype(str) == _c3_sel)
+            _c3_sub = _path_detail_full[
+                (_path_detail_full["bucket_kind"] == "liquid")
+                & (_path_detail_full["bucket_name"].astype(str) == _c3_sel)
             ]
 
         # Term payout/withdrawal years earn no return by design (BB = matured
@@ -745,7 +722,7 @@ def render(
         )
         # ใช้ bucket แรก (bill-paying) เป็นตัววัด — bucket อื่นถูก rebalance
         # ระหว่างปี ทำให้ shortfall รายปีของพวกมันไม่สะท้อนความเสี่ยงจริง
-        _first_bucket_name = str(_new_defs[0]["name"]) if _new_defs else None
+        _first_bucket_name = str(new_defs[0]["name"]) if new_defs else None
         _sf_chart_df = (
             chart_df[chart_df["bucket_name"].astype(str) == _first_bucket_name].copy()
             if _first_bucket_name else chart_df.iloc[0:0]
@@ -776,128 +753,17 @@ def render(
             st.altair_chart((_sf_line + _sf_labels).properties(height=320), width="stretch")
 
     # ============================================================
-    # CHART 5 (LEGACY — disabled): old stacked-area chart was replaced by
-    # the new 3-graph section in Chart 6 below. Block kept in if-False so
-    # the entire region can be re-enabled by flipping the guard.
-    # ============================================================
-    if False and (
-        _path_detail_df is not None
-        and not _path_detail_df.empty
-        and {"year", "bucket_name", "beginning_balance"}.issubset(_path_detail_df.columns)
-        and len(_new_defs) >= 2
-    ):
-        _b0_name_t = str(_new_defs[0]["name"])
-        _b1_name_t = str(_new_defs[1]["name"])
-
-        _target_df = (
-            _path_detail_df.groupby(["year", "bucket_name"], as_index=False)["beginning_balance"]
-            .mean()
-            .rename(columns={"beginning_balance": "required_amount"})
-        )
-        _target_df["year"] = _target_df["year"].astype(int)
-        _target_df["bucket_name"] = _target_df["bucket_name"].astype(str)
-
-        if not _target_df.empty:
-            st.markdown("#### 5. 🎯 เงินคงเหลือต้นปีของแต่ละ bucket (เฉลี่ย — Mean ของ Simulation)")
-            st.caption(
-                "ค่าเฉลี่ย (mean) ของ beginning_balance ต่อ bucket ต่อปี จาก Monte Carlo simulation "
-                "— สะท้อน allocation ที่เกิดขึ้นจริงในกรณีค่าคาดการณ์ของทุก simulation"
-            )
-
-            # Force complete (year × bucket) grid with 0-fill
-            _all_years_t = sorted(_target_df["year"].unique().tolist())
-            _all_buckets_t = [_b0_name_t, _b1_name_t]
-            _grid_t = pd.MultiIndex.from_product(
-                [_all_years_t, _all_buckets_t], names=["year", "bucket_name"]
-            ).to_frame(index=False)
-            _target_df = (
-                _grid_t.merge(_target_df, on=["year", "bucket_name"], how="left")
-                .fillna({"required_amount": 0.0})
-            )
-            _target_df["required_amount"] = _target_df["required_amount"].clip(lower=0)
-            _target_df["bucket_th"] = _target_df["bucket_name"].astype(str)
-
-            _year_totals_t = (
-                _target_df.groupby("year")["required_amount"].sum().rename("_total")
-            )
-            _target_df = _target_df.merge(_year_totals_t, on="year", how="left")
-            import numpy as _np_target
-            _target_df["weight_frac"] = _np_target.where(
-                _target_df["_total"] > 0,
-                _target_df["required_amount"] / _target_df["_total"].replace(0, 1),
-                0.0,
-            )
-            _target_df["weight_pct"] = (_target_df["weight_frac"] * 100).round(1)
-
-            # ── View 1: absolute baht (stacked area) ──
-            _target_abs_chart = (
-                alt.Chart(_target_df)
-                .mark_area()
-                .encode(
-                    x=alt.X("year:O", title="ปี"),
-                    y=alt.Y(
-                        "required_amount:Q",
-                        stack=True,
-                        title="เงินเป้าหมาย (บาท)",
-                        axis=alt.Axis(format=",.0f"),
-                    ),
-                    color=alt.Color(
-                        "bucket_th:N", title="กลุ่มลงทุน", scale=_bucket_color_scale
-                    ),
-                    tooltip=[
-                        alt.Tooltip("year:O", title="ปี"),
-                        alt.Tooltip("bucket_th:N", title="กลุ่มลงทุน"),
-                        alt.Tooltip(
-                            "required_amount:Q", title="เงินเป้าหมาย", format=",.0f"
-                        ),
-                        alt.Tooltip("weight_pct:Q", title="สัดส่วน %", format=".1f"),
-                    ],
-                )
-                .properties(height=300)
-            )
-            st.altair_chart(_target_abs_chart, width="stretch")
-
-            # ── View 2: normalized % (stacked area, 0–100%) ──
-            _target_pct_chart = (
-                alt.Chart(_target_df)
-                .mark_area()
-                .encode(
-                    x=alt.X("year:O", title="ปี"),
-                    y=alt.Y(
-                        "weight_frac:Q",
-                        stack=True,
-                        title="สัดส่วน",
-                        scale=alt.Scale(domain=[0, 1]),
-                        axis=alt.Axis(format=".0%"),
-                    ),
-                    color=alt.Color(
-                        "bucket_th:N", title="กลุ่มลงทุน", scale=_bucket_color_scale
-                    ),
-                    tooltip=[
-                        alt.Tooltip("year:O", title="ปี"),
-                        alt.Tooltip("bucket_th:N", title="กลุ่มลงทุน"),
-                        alt.Tooltip(
-                            "required_amount:Q", title="เงินเป้าหมาย", format=",.0f"
-                        ),
-                        alt.Tooltip("weight_pct:Q", title="สัดส่วน %", format=".1f"),
-                    ],
-                )
-                .properties(height=240)
-            )
-            st.altair_chart(_target_pct_chart, width="stretch")
-
-    # ============================================================
     # CHART 6: เงินคงเหลือต้นปี — 3 sub-graphs (replaces old Chart 5+6)
     #   6.1 Stacked area (bucket 1 ล่าง, bucket 2 บน) — mean
     #   6.2 bucket 2 (long) — band + mean
     #   6.3 bucket 1 (bill-paying) — band + mean + target (rolling window)
     # ============================================================
-    if not chart_df.empty and len(_new_defs) >= 2:
+    if not chart_df.empty and len(new_defs) >= 2:
         st.markdown("#### 5. 💼 การจัดสรรเงินในแต่ละปี — มูลค่า ณ ต้นปี")
         # Shared x-axis domain so every chart-5 graph spans the same years.
         _all_years_c5 = sorted(chart_df["year"].astype(int).unique().tolist())
-        _b0_name = str(_new_defs[0]["name"])  # bucket 1 (bill-paying)
-        _b1_name = str(_new_defs[1]["name"])  # bucket 2 (long / growth)
+        _b0_name = str(new_defs[0]["name"])  # bucket 1 (bill-paying)
+        _b1_name = str(new_defs[1]["name"])  # bucket 2 (long / growth)
 
         # ── 6.1 Stacked area: bucket 1 (b0) ล่าง, bucket 2 (b1) บน ──
         _stack_df = chart_df[
@@ -1004,7 +870,7 @@ def render(
     _target_chart_df = pd.DataFrame()
     if (
         not chart_df.empty
-        and len(_new_defs) >= 2
+        and len(new_defs) >= 2
         and expense_df is not None
         and not expense_df.empty
         and {"year", "inflated_amount"}.issubset(expense_df.columns)
@@ -1014,8 +880,8 @@ def render(
             expense_df.groupby("year")["inflated_amount"].sum().sort_index()
         )
         _last_exp_year_t = int(_exp_by_year_t.index.max())
-        _b0_start_off_t = int(_new_defs[0].get("year_start", 1))
-        _b0_end_off_t = _new_defs[0].get("year_end")
+        _b0_start_off_t = int(new_defs[0].get("year_start", 1))
+        _b0_end_off_t = new_defs[0].get("year_end")
         _window_0_t = (
             int(_b0_end_off_t) - _b0_start_off_t + 1
             if _b0_end_off_t is not None else 1
@@ -1165,7 +1031,7 @@ def render(
             width="stretch",
         )
 
-    if not chart_df.empty and len(_new_defs) >= 2:
+    if not chart_df.empty and len(new_defs) >= 2:
         # ── 5.2 Term-asset allocation — P10–P90 band + mean, per asset ──
         st.markdown(
             "##### 5.2 การจัดสรรเงินลงทุนในสินทรัพย์แบบมีกำหนดระยะเวลา — แถบ P10–P90, เส้นค่าเฉลี่ย"
@@ -1196,7 +1062,6 @@ def render(
                     (_tasset_stats["mean_v"].abs() > 1e-9)
                     | (_tasset_stats["p90"].abs() > 1e-9)
                 ]
-                _all_years_c5 = sorted(chart_df["year"].astype(int).unique().tolist())
                 _x_c52 = alt.X("year:O", title="ปี", scale=alt.Scale(domain=_all_years_c5))
                 # Orange/yellow palette per asset (echoes the 5.1 term stack);
                 # legend shown in the caption instead of on the chart.
@@ -1272,152 +1137,6 @@ def render(
             _b0_name,
             "##### 5.4 การจัดสรรเงินสำหรับค่าใช้จ่าย — แถบ P10–P90, เส้นค่าเฉลี่ย, เส้นประแสดงเป้าหมายเพื่อให้ครอบคลุมค่าใช้จ่าย",
             _show_target=True,
-        )
-
-    # Legacy block — disabled (kept for reference; replaced by 6.1–6.3 above)
-    if False:
-
-        # ── Compute target for BUCKET แรก only (bill-paying bucket) ──
-        # ตรงกับ engine: ต้นปี y, bucket 0 ต้องมีเงินพอจ่ายค่าใช้จ่าย
-        # ในอีก window_0 ปีถัดไป. ไม่ทำ target ของ bucket 2 เพราะค่าตัวเลข
-        # สูงเกินสเกลกราฟ (ทับเส้น mean ของทั้ง 2 buckets).
-        #   target_b0(y) = Σ expense[t]  for t in [y, y+window_0-1]
-        _target_chart_df = pd.DataFrame()
-        if (
-            expense_df is not None
-            and not expense_df.empty
-            and {"year", "inflated_amount"}.issubset(expense_df.columns)
-            and assumptions is not None
-            and _new_defs
-        ):
-            _exp_by_year = (
-                expense_df.groupby("year")["inflated_amount"].sum().sort_index()
-            )
-            _sim_start = int(getattr(assumptions, "start_year", _exp_by_year.index.min()))
-            _last_exp_year = int(_exp_by_year.index.max())
-
-            _b0_name = str(_new_defs[0]["name"])
-            _b0_start_off = int(_new_defs[0].get("year_start", 1))
-            _b0_end_off = _new_defs[0].get("year_end")
-            _window_0 = (
-                int(_b0_end_off) - _b0_start_off + 1
-                if _b0_end_off is not None else 1
-            )
-            if _window_0 < 1:
-                _window_0 = 1
-
-            def _sum_exp(_y_from: int, _y_to: int) -> float:
-                if _y_from > _y_to:
-                    return 0.0
-                return float(
-                    sum(
-                        float(_exp_by_year.get(_t, 0.0))
-                        for _t in range(_y_from, _y_to + 1)
-                    )
-                )
-
-            _all_chart_years = sorted(int(y) for y in chart_df["year"].unique())
-            _tgt_rows = []
-            for _y in _all_chart_years:
-                _b0_win_end = min(_y + _window_0 - 1, _last_exp_year)
-                _t0 = _sum_exp(_y, _b0_win_end)
-                _tgt_rows.append({
-                    "year": _y, "bucket_name": _b0_name, "target_amount": round(_t0, 2),
-                })
-            _target_chart_df = pd.DataFrame(_tgt_rows)
-            if not _target_chart_df.empty:
-                _target_chart_df["bucket_th"] = _target_chart_df["bucket_name"].astype(str)
-
-        # ── Build a long-form lines DataFrame so the legend can show all
-        # three series (Mean + Band + Target) with the right style swatch. ──
-        _SERIES_MEAN   = "เส้นค่าเฉลี่ย"
-        _SERIES_BAND   = "ช่วง P10–P90"
-        _SERIES_TARGET = "เป้าหมาย (bucket แรก)"
-        _STYLE_DOMAIN  = [_SERIES_MEAN, _SERIES_BAND, _SERIES_TARGET]
-
-        # Mean line data
-        _mean_long = chart_df[["year", "bucket_th", "mean_beginning_balance", "mean_label",
-                               "p10_beginning_balance", "p90_beginning_balance"]].copy()
-        _mean_long["series"] = _SERIES_MEAN
-        _mean_long = _mean_long.rename(columns={"mean_beginning_balance": "value"})
-
-        # Target line data (only bucket 0)
-        if not _target_chart_df.empty:
-            _target_long = _target_chart_df[["year", "bucket_th", "target_amount"]].copy()
-            _target_long["series"] = _SERIES_TARGET
-            _target_long = _target_long.rename(columns={"target_amount": "value"})
-        else:
-            _target_long = pd.DataFrame(columns=["year", "bucket_th", "value", "series"])
-
-        _lines_long = pd.concat([_mean_long, _target_long], ignore_index=True, sort=False)
-
-        # strokeDash legend: maps series name → dash pattern
-        _stroke_scale = alt.Scale(
-            domain=_STYLE_DOMAIN,
-            range=[[1, 0], [0, 0], [6, 4]],   # solid / (band shown via area) / dashed
-        )
-
-        # ── Band layer — encoded with a fake "series" so it shows in legend ──
-        _band_df = chart_df[["year", "bucket_th", "p10_beginning_balance",
-                             "p90_beginning_balance"]].copy()
-        _band_df["series"] = _SERIES_BAND
-        _band = (
-            alt.Chart(_band_df)
-            .mark_area(opacity=0.15)
-            .encode(
-                x=alt.X("year:O", title="ปี"),
-                y=alt.Y("p10_beginning_balance:Q", title="ยอดเงิน ณ ต้นปี (บาท)",
-                        axis=alt.Axis(format=",.0f")),
-                y2=alt.Y2("p90_beginning_balance:Q"),
-                color=alt.Color("bucket_th:N", scale=_bucket_color_scale, legend=None),
-                opacity=alt.Opacity(
-                    "series:N",
-                    scale=alt.Scale(domain=_STYLE_DOMAIN, range=[0, 0.15, 0]),
-                    legend=alt.Legend(title="ประเภทเส้น", orient="right"),
-                ),
-            )
-        )
-
-        # ── Combined line layer (Mean + Target) with strokeDash legend ──
-        _lines = (
-            alt.Chart(_lines_long)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("year:O", title="ปี"),
-                y=alt.Y("value:Q", title="ยอดเงิน ณ ต้นปี (บาท)",
-                        axis=alt.Axis(format=",.0f")),
-                color=alt.Color("bucket_th:N", scale=_bucket_color_scale, title="กลุ่มลงทุน"),
-                strokeDash=alt.StrokeDash(
-                    "series:N",
-                    scale=_stroke_scale,
-                    legend=alt.Legend(title="ประเภทเส้น", orient="right"),
-                ),
-                tooltip=[
-                    alt.Tooltip("year:O",      title="ปี"),
-                    alt.Tooltip("bucket_th:N", title="กลุ่มลงทุน"),
-                    alt.Tooltip("series:N",    title="ประเภท"),
-                    alt.Tooltip("value:Q",     title="บาท", format=",.0f"),
-                ],
-            )
-        )
-
-        # ── Value labels on the Mean line only ──
-        _line_labels = (
-            alt.Chart(chart_df)
-            .mark_text(dy=-12, fontSize=14, fontWeight="bold")
-            .encode(
-                x=alt.X("year:O"),
-                y=alt.Y("mean_beginning_balance:Q"),
-                text=alt.Text("mean_label:N"),
-                color=alt.Color("bucket_th:N", scale=_bucket_color_scale, legend=None),
-            )
-        )
-
-        st.altair_chart(
-            alt.layer(_band, _lines, _line_labels)
-            .resolve_scale(opacity="independent", strokeDash="independent")
-            .properties(height=380),
-            width="stretch",
         )
 
     # ── Tables (📊 ตารางข้อมูล) moved to the bottom of the page ──
@@ -1858,12 +1577,7 @@ def render(
             and {"year", "child_name", "inflated_amount"}.issubset(expense_df.columns)
         ):
             # Preserve order of first appearance; push "Parent" to the end
-            _seen, _order = set(), []
-            for _n in expense_df["child_name"].astype(str).tolist():
-                if _n not in _seen:
-                    _seen.add(_n)
-                    _order.append(_n)
-            _child_cols_ordered = [n for n in _order if n != "Parent"] + [n for n in _order if n == "Parent"]
+            _child_cols_ordered = _ordered_children(expense_df)
 
             _exp_by_child = (
                 expense_df.groupby(["year", "child_name"], as_index=False)["inflated_amount"]
@@ -1976,16 +1690,16 @@ def render(
         "ออมเข้า/จ่ายออก/ปรับสมดุล (rebalance) อย่างไร — ยอดคงเหลือแสดงช่วง P10–P90 "
         "เป็นแนวทาง ไม่ใช่การรับประกันผล"
     )
-    _g8 = _path_detail_full
     if (
-        _g8 is not None
-        and not _g8.empty
+        _path_detail_full is not None
+        and not _path_detail_full.empty
         and {
             "year", "bucket_name", "bucket_kind", "beginning_balance",
             "contribution_in", "transfer_in", "investment_return",
             "expense_out", "transfer_out", "ending_balance",
-        }.issubset(_g8.columns)
+        }.issubset(_path_detail_full.columns)
     ):
+        _g8 = _path_detail_full
         if "topup_in" not in _g8.columns:
             _g8 = _g8.assign(topup_in=0.0)
         _agg8 = _g8.groupby(["year", "bucket_kind", "bucket_name"], as_index=False).agg(
@@ -2013,15 +1727,7 @@ def render(
             and not expense_df.empty
             and {"year", "child_name", "inflated_amount"}.issubset(expense_df.columns)
         ):
-            _seen8, _ord_names8 = set(), []
-            for _n8 in expense_df["child_name"].astype(str).tolist():
-                if _n8 not in _seen8:
-                    _seen8.add(_n8)
-                    _ord_names8.append(_n8)
-            _exp_child_cols8 = (
-                [n for n in _ord_names8 if n != "Parent"]
-                + [n for n in _ord_names8 if n == "Parent"]
-            )
+            _exp_child_cols8 = _ordered_children(expense_df)
             _yr_total8 = expense_df.groupby("year")["inflated_amount"].sum()
             _share8 = (
                 expense_df.groupby(["year", "child_name"], as_index=False)["inflated_amount"].sum()
@@ -2037,8 +1743,8 @@ def render(
                     # short bucket carries expense_out, so other assets become 0).
                     _agg8[_cn8] = (_agg8[_cn8].fillna(0.0) * _agg8["exp"]).round(0)
 
-        # Stable display order: liquid buckets (in _new_defs order), then terms.
-        _liq_names8 = [str(d["name"]) for d in _new_defs]
+        # Stable display order: liquid buckets (in new_defs order), then terms.
+        _liq_names8 = [str(d["name"]) for d in new_defs]
         _term_names8 = sorted(
             _agg8.loc[_agg8["bucket_kind"] == "term", "bucket_name"].astype(str).unique().tolist()
         )

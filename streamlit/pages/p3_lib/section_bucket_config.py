@@ -25,6 +25,7 @@ from .state import (
     with_min_max as _with_min_max,
     get_bucket_definitions as _get_bucket_definitions,
     build_bucket_configs_from_definitions as _build_bucket_configs_from_definitions,
+    wipe_stale_widget_keys as _wipe_stale_widget_keys,
 )
 
 
@@ -51,20 +52,9 @@ def render() -> dict:
                      help="คืนค่าตั้งต้นของ bucket และ asset ทั้งหมดจาก PARAM_DEFAULTS",
                      width="stretch"):
             # Wipe stale widget keys so freshly-reset values aren't shadowed by
-            # cached widget state (same cleanup as the cust_id-change path).
-            _stale_widget_keys = [
-                _k for _k in list(st.session_state.keys())
-                if (
-                    _k.startswith("asset_")
-                    or _k.startswith("bucket_name_")
-                    or _k.startswith("bucket_year_end_")
-                    or _k.startswith("bucket_year_start_ro_")
-                    or _k.startswith("bucket_year_end_inf_")
-                    or _k.startswith("term_")
-                )
-            ]
-            for _k in _stale_widget_keys:
-                del st.session_state[_k]
+            # cached widget state (same cleanup as the cust_id-change path, plus
+            # term_ keys since Set Default also clears term assets).
+            _wipe_stale_widget_keys(("term_",))
 
             _default_defs = copy.deepcopy(PARAM_DEFAULTS["inv_bucket_definitions"])
             st.session_state["inv_bucket_definitions"] = _default_defs
@@ -161,14 +151,14 @@ def render() -> dict:
 
     # Build _new_defs (no overlap by construction — year_starts derived)
     _new_defs.append({
-        "name": (str(_b0_name).strip() or "สำหรับค่าใช้จ่าย"),
+        "name": _b0_name,
         "year_start": 1,
         "year_end": int(_b0_end),
         "discount_rate": _cur_defs[0].get("discount_rate", 0.02),
         "assets": _cur_defs[0].get("assets", _DEFAULT_NEW_ASSETS.copy()),
     })
     _new_defs.append({
-        "name": (str(_b1_name).strip() or "สำหรับลงทุนเพื่อการศึกษา"),
+        "name": _b1_name,
         "year_start": _b1_start,
         "year_end": None,
         "discount_rate": _cur_defs[1].get("discount_rate", 0.04),
@@ -354,12 +344,10 @@ def render() -> dict:
                 elif _std > 50:
                     _warns_a.append(f"'{_nm}': Std Dev = {_std:.1f}% สูงผิดปกติ ลองตรวจสอบอีกครั้ง")
     
-            if _errors_a or _warns_a:
-                with st.container(border=False):
-                    for _e in _errors_a:
-                        st.error(_e)
-                    for _w in _warns_a:
-                        st.warning(_w)
+            for _e in _errors_a:
+                st.error(_e)
+            for _w in _warns_a:
+                st.warning(_w)
     
             if _errors_a:
                 _asset_config_valid = False
@@ -1022,139 +1010,6 @@ def render() -> dict:
             _tw_d = sum(float(a["weight_pct"]) for a in _valid_a_d)
             _eff_d = sum(float(a["weight_pct"]) * float(a.get("mean_pct", 0)) for a in _valid_a_d) / _tw_d
             _new_defs[_bi_d]["discount_rate"] = _eff_d / 100.0
-    
-    # ---- Asset Performance Preview (hidden — flip flag below to re-enable) ----
-    if False:  # was: with st.expander(S("p3", "preview_expander"), expanded=False):
-        import numpy as _np
-    
-        # ---- 1. Risk-Return Scatter ----
-        _scatter_rows = []
-        for _bd in _new_defs:
-            _valid_a = [a for a in _bd.get("assets", []) if float(a.get("weight_pct", 0)) > 0]
-            _total_w = sum(float(a["weight_pct"]) for a in _valid_a) or 1.0
-            for _a in _valid_a:
-                _scatter_rows.append({
-                    "bucket": _bd["name"],
-                    "asset": str(_a.get("asset_name", "?")),
-                    "mean_pct": float(_a.get("mean_pct", 0)),
-                    "std_pct": float(_a.get("std_pct", 0)),
-                    "weight_pct": float(_a.get("weight_pct", 0)),
-                    "norm_weight": float(_a["weight_pct"]) / _total_w * 100,
-                })
-    
-        if _scatter_rows:
-            _scatter_df = pd.DataFrame(_scatter_rows)
-    
-            st.markdown(S("p3", "preview_rr_map"))
-            _rr_chart = (
-                alt.Chart(_scatter_df)
-                .mark_circle()
-                .encode(
-                    x=alt.X("std_pct:Q", title="Std Dev % (ความเสี่ยง)", scale=alt.Scale(zero=True)),
-                    y=alt.Y("mean_pct:Q", title="Mean Return %"),
-                    color=alt.Color("bucket:N", title="Bucket"),
-                    size=alt.Size("norm_weight:Q", scale=alt.Scale(range=[80, 800]), legend=None),
-                    tooltip=[
-                        alt.Tooltip("asset:N", title="Asset"),
-                        alt.Tooltip("bucket:N", title="Bucket"),
-                        alt.Tooltip("mean_pct:Q", title="Mean %", format=".2f"),
-                        alt.Tooltip("std_pct:Q", title="Std Dev %", format=".2f"),
-                        alt.Tooltip("norm_weight:Q", title="Weight %", format=".1f"),
-                    ],
-                )
-                .properties(height=320)
-            )
-            # reference lines
-            _zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
-                strokeDash=[4, 4], color="gray", opacity=0.5
-            ).encode(y="y:Q")
-            st.altair_chart(_rr_chart + _zero_line, width="stretch")
-    
-            # ---- 2. Asset Composition per Bucket ----
-            st.markdown(S("p3", "preview_composition"))
-            _comp_chart = (
-                alt.Chart(_scatter_df)
-                .mark_bar()
-                .encode(
-                    x=alt.X("norm_weight:Q", stack="normalize", title="สัดส่วน", axis=alt.Axis(format="%")),
-                    y=alt.Y("bucket:N", title="Bucket"),
-                    color=alt.Color("asset:N", title="Asset"),
-                    tooltip=[
-                        alt.Tooltip("bucket:N"),
-                        alt.Tooltip("asset:N"),
-                        alt.Tooltip("norm_weight:Q", title="Weight %", format=".1f"),
-                    ],
-                )
-                .properties(height=max(60 * len(_new_defs), 120))
-            )
-            st.altair_chart(_comp_chart, width="stretch")
-    
-            # ---- 3. Simulated Return Distribution ----
-            st.markdown(S("p3", "preview_dist"))
-            _SIM_N = 2000
-            _rng_preview = _np.random.default_rng(42)
-            _sim_rows = []
-            for _bd in _new_defs:
-                for _a in _bd.get("assets", []):
-                    _w = float(_a.get("weight_pct", 0))
-                    if _w <= 0:
-                        continue
-                    _mu  = float(_a.get("mean_pct", 0)) / 100
-                    _sig = float(_a.get("std_pct", 0)) / 100
-                    _lo  = float(_a.get("min_pct", -100)) / 100
-                    _hi  = float(_a.get("max_pct", 100)) / 100
-                    if _sig > 0:
-                        _samples = _np.clip(_rng_preview.normal(_mu, _sig, _SIM_N), _lo, _hi)
-                    else:
-                        _samples = _np.full(_SIM_N, _mu)
-                    for _s in _samples:
-                        _sim_rows.append({
-                            "bucket": _bd["name"],
-                            "asset": str(_a.get("asset_name", "?")),
-                            "return_pct": float(_s) * 100,
-                        })
-    
-            if _sim_rows:
-                _sim_df = pd.DataFrame(_sim_rows)
-    
-                _dist_chart = (
-                    alt.Chart(_sim_df)
-                    .mark_bar(opacity=0.6, binSpacing=0)
-                    .encode(
-                        x=alt.X("return_pct:Q", bin=alt.Bin(maxbins=40), title="Annual Return %"),
-                        y=alt.Y("count():Q", title="จำนวน scenarios", stack=None),
-                        color=alt.Color("asset:N", title="Asset"),
-                        facet=alt.Facet("bucket:N", columns=3, title="Bucket"),
-                        tooltip=[
-                            alt.Tooltip("asset:N"),
-                            alt.Tooltip("return_pct:Q", bin=True, format=".1f"),
-                            alt.Tooltip("count():Q"),
-                        ],
-                    )
-                    .properties(width=260, height=180)
-                )
-                st.altair_chart(_dist_chart)
-    
-            # ---- 4. Mean & Std comparison table ----
-            st.markdown(S("p3", "preview_summary"))
-            _summary_rows = []
-            for _bd in _new_defs:
-                _valid_a2 = [a for a in _bd.get("assets", []) if float(a.get("weight_pct", 0)) > 0]
-                _tw2 = sum(float(a["weight_pct"]) for a in _valid_a2) or 1.0
-                for _a in _valid_a2:
-                    _w2 = float(_a["weight_pct"]) / _tw2
-                    _summary_rows.append({
-                        "Bucket": _bd["name"],
-                        "Asset": str(_a.get("asset_name", "?")),
-                        "Weight": f"{_w2 * 100:.1f}%",
-                        "Mean Return": f"{_a.get('mean_pct', 0):.2f}%",
-                        "Std Dev": f"{_a.get('std_pct', 0):.2f}%",
-                        "Sharpe*": f"{(_a.get('mean_pct', 0) / _a['std_pct']):.2f}" if float(_a.get("std_pct", 0)) > 0 else "∞",
-                    })
-            st.dataframe(pd.DataFrame(_summary_rows), width="stretch", hide_index=True)
-            st.caption(S("p3", "preview_sharpe_note"))
-        else:
-            st.info(S("p3", "preview_empty"))
     
     # ---- Save definitions to session state + draft (B2: survive navigation) ----
     st.session_state["inv_bucket_definitions"] = _new_defs

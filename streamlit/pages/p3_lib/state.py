@@ -31,17 +31,6 @@ DEFAULT_ASSET = with_min_max({
     "mean_pct": 3.0, "std_pct": 5.0,
 })
 
-DEFAULT_NEW_ASSETS = [
-    with_min_max({"asset_name": "Asset 1", "weight_pct": 100.0,
-                  "mean_pct": 4.0, "std_pct": 8.0})
-]
-
-FIXED_BUCKET_TEMPLATE = [
-    {"name": "สำหรับค่าใช้จ่าย", "idx": 0},
-    {"name": "สำหรับลงทุนเพื่อการศึกษา", "idx": 1},
-]
-
-
 PARAM_DEFAULTS = {
     # MC controls
     "inv_mc_n_paths": 1000,
@@ -82,10 +71,6 @@ PARAM_DEFAULTS = {
     "inv_mc_result": None,
     "inv_mc_analysis": None,
     "inv_investment_sim_done": False,
-
-    # allocation mode
-    "inv_allocation_mode": "auto",
-    "inv_manual_alloc_input_mode": "amount",
 }
 
 
@@ -94,8 +79,6 @@ _WIDGET_DEFAULT_KEYS = (
     "inv_mc_random_seed",
     "inv_mc_keep_path_detail",
     "inv_mc_keep_asset_detail",
-    "inv_allocation_mode",
-    "inv_manual_alloc_input_mode",
 )
 
 _RUNTIME_DEFAULT_KEYS = (
@@ -108,6 +91,25 @@ _RUNTIME_DEFAULT_KEYS = (
 # ──────────────────────────────────────────────────────
 # Widget state init (idempotent, called once per render)
 # ──────────────────────────────────────────────────────
+
+# Widget-key prefixes that shadow freshly-loaded/reset bucket+asset values.
+# Streamlit's widget tracker survives `del st.session_state[key]`, so callers
+# must ALSO bump _p3_render_nonce to force keys to regenerate with new suffixes.
+_STALE_WIDGET_PREFIXES = (
+    "asset_",
+    "bucket_name_",
+    "bucket_year_end_",
+    "bucket_year_start_ro_",
+    "bucket_year_end_inf_",
+)
+
+
+def wipe_stale_widget_keys(extra_prefixes: tuple = ()) -> None:
+    """Delete widget-state keys that would shadow reloaded bucket/asset values."""
+    prefixes = _STALE_WIDGET_PREFIXES + tuple(extra_prefixes)
+    for k in [k for k in list(st.session_state.keys()) if k.startswith(prefixes)]:
+        del st.session_state[k]
+
 
 def init_widget_state() -> None:
     """Hydrate widget buffers + runtime keys; reload saved config on cust_id change.
@@ -133,21 +135,8 @@ def init_widget_state() -> None:
 
     if _cid_changed:
         # Cust_id change: wipe widget keys that would shadow loaded values.
-        # Streamlit's widget tracker survives `del st.session_state[key]` —
-        # the only reliable refresh path is to also bump the nonce so widget
-        # keys regenerate with new suffixes.
-        _stale = [
-            k for k in list(st.session_state.keys())
-            if (
-                k.startswith("asset_")
-                or k.startswith("bucket_name_")
-                or k.startswith("bucket_year_end_")
-                or k.startswith("bucket_year_start_ro_")
-                or k.startswith("bucket_year_end_inf_")
-            )
-        ]
-        for k in _stale:
-            del st.session_state[k]
+        # (nonce is bumped below so widget keys regenerate with new suffixes.)
+        wipe_stale_widget_keys()
 
         _auto_loaded = False
         _auto_load_err = None
@@ -288,7 +277,3 @@ def build_bucket_return_models_from_definitions(defs: list) -> list:
             distribution="student_t",
         ))
     return models
-
-
-def build_bucket_return_models_from_state() -> list:
-    return build_bucket_return_models_from_definitions(get_bucket_definitions())

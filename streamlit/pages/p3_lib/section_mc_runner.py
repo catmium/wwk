@@ -11,7 +11,7 @@ import streamlit as st
 import pandas as pd
 
 from strings import S
-from state import draft_get, _widget_key, on_widget_change
+from state import draft_get, _widget_key, on_widget_change, draft_owner_error
 from portfolio_bucket_engine import (
     prepare_annual_expense,
     assign_expense_to_buckets,
@@ -26,7 +26,8 @@ from asset_store import save_bucket_definitions
 
 from .state import (
     PARAM_DEFAULTS,
-    build_bucket_return_models_from_state,
+    build_bucket_return_models_from_definitions,
+    get_bucket_definitions,
 )
 from .helpers import analyze_mc_result, bucket_fingerprint, saving_fingerprint, term_fingerprint
 
@@ -45,19 +46,13 @@ def compute_allocation_preview(
 ) -> dict:
     """Compute the auto-allocation preview used as MC initial allocation.
 
-    Returns dict with auto_allocation_df, preview_requirement_df,
-    allocation_preview_ok, alloc_preview_err (if any).
+    Returns dict with auto_allocation_df.
     """
     conservative_rate_map = {
         d["name"]: float(d["discount_rate"]) for d in new_defs
     }
 
-    out = {
-        "auto_allocation_df": pd.DataFrame(),
-        "preview_requirement_df": pd.DataFrame(),
-        "allocation_preview_ok": False,
-        "alloc_preview_err": None,
-    }
+    out = {"auto_allocation_df": pd.DataFrame()}
 
     try:
         preview_expense_df = prepare_annual_expense(expense_df)
@@ -72,16 +67,13 @@ def compute_allocation_preview(
             bucket_configs=bucket_configs,
             discount_rate_override_map=conservative_rate_map,
         )
-        auto_allocation_df = allocate_initial_savings_to_buckets(
+        out["auto_allocation_df"] = allocate_initial_savings_to_buckets(
             initial_savings=float(saving_plan.initial_savings),
             bucket_requirement_df=preview_requirement_df,
             funding_rule=funding_rule,
         )
-        out["auto_allocation_df"] = auto_allocation_df
-        out["preview_requirement_df"] = preview_requirement_df
-        out["allocation_preview_ok"] = True
-    except Exception as e:
-        out["alloc_preview_err"] = e
+    except Exception:
+        pass
 
     return out
 
@@ -126,39 +118,8 @@ def render_mc_config(
                 disabled=run_mc_disabled,
             )
 
-        with st.expander(S("p3", "advanced_settings_header"), expanded=False):
-            adv1, adv_div, adv2 = st.columns([1, 0.3, 2])
-
-            with adv1:
-                st.number_input(
-                    S("p3", "label_seed"),
-                    min_value=0,
-                    step=1,
-                    key=_widget_key("inv_mc_random_seed"),
-                    on_change=on_widget_change,
-                    args=("inv_mc_random_seed", int),
-                    help=S("p3", "label_seed_help"),
-                )
-
-            with adv2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                dc1, dc2 = st.columns(2)
-                with dc1:
-                    st.checkbox(
-                        S("p3", "label_keep_path"),
-                        key=_widget_key("inv_mc_keep_path_detail"),
-                        on_change=on_widget_change,
-                        args=("inv_mc_keep_path_detail", bool),
-                        help=S("p3", "label_keep_path_help"),
-                    )
-                with dc2:
-                    st.checkbox(
-                        S("p3", "label_keep_asset"),
-                        key=_widget_key("inv_mc_keep_asset_detail"),
-                        on_change=on_widget_change,
-                        args=("inv_mc_keep_asset_detail", bool),
-                        help=S("p3", "label_keep_asset_help"),
-                    )
+        # Advanced settings hidden: seed fixed at 42, path×year×bucket detail
+        # always kept (configured in run_mc()).
 
         # Placeholder for progress + result (inside the same box as config)
         run_output_placeholder = st.empty()
@@ -206,22 +167,16 @@ def run_mc(
       - Saves bucket config to asset_store (keyed by cust_id)
     """
     try:
-        bucket_return_models = build_bucket_return_models_from_state()
+        bucket_return_models = build_bucket_return_models_from_definitions(get_bucket_definitions())
         st.session_state["_last_bucket_return_models"] = bucket_return_models
 
         mc_config = MonteCarloConfig(
             n_paths=int(draft_get("inv_mc_n_paths", PARAM_DEFAULTS["inv_mc_n_paths"])),
-            random_seed=int(draft_get("inv_mc_random_seed", PARAM_DEFAULTS["inv_mc_random_seed"])),
-            keep_path_detail=bool(draft_get("inv_mc_keep_path_detail", True)),
-            keep_asset_detail=bool(draft_get("inv_mc_keep_asset_detail", False)),
+            random_seed=42,            # fixed (advanced settings hidden)
+            keep_path_detail=True,     # always keep path × year × bucket detail
+            keep_asset_detail=False,
             success_threshold=0.0,
         )
-
-        # Manual allocation override (currently always None since manual mode
-        # is disabled — kept for forward compatibility).
-        alloc_override = None
-        if draft_get("inv_allocation_mode", "auto") == "manual":
-            alloc_override = st.session_state.get("_manual_allocation_df_cache")
 
         with run_output_placeholder.container():
             progress_bar = st.progress(0)
@@ -245,7 +200,7 @@ def run_mc(
             bucket_return_models=bucket_return_models,
             mc_config=mc_config,
             simulation_start_year=int(assumptions.start_year),
-            initial_allocation_override_df=alloc_override,
+            initial_allocation_override_df=None,
             term_assets=st.session_state.get("inv_term_assets", []),
             progress_callback=_mc_progress_callback,
             progress_update_every=10,
@@ -285,7 +240,12 @@ def run_mc(
         # widget values this rerun) — not a session_state re-read which can
         # be stale.
         cust_id_for_save = (draft_get("cust_id", "") or "").strip()
-        if cust_id_for_save:
+        _owner_err = draft_owner_error(cust_id_for_save)
+        if _owner_err:
+            # Backstop: on-screen config belongs to a different customer — skip
+            # the save rather than write it under the wrong id.
+            st.warning(_owner_err)
+        elif cust_id_for_save:
             try:
                 save_bucket_definitions(cust_id_for_save, new_defs)
                 saved_asset_names = []
