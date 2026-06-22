@@ -87,36 +87,12 @@ total_projected_expense = (
     else 0.0
 )
 
-peak_annual_expense = (
-    float(safe_summary_metric(summary_df, "peak_annual_expense"))
-    if summary_df is not None and not summary_df.empty
-    else 0.0
-)
-peak_annual_expense_year = (
-    int(safe_summary_metric(summary_df, "peak_annual_expense_year"))
-    if summary_df is not None and not summary_df.empty
-    else 0
-)
-current_monthly_contribution = (
-    int(safe_summary_metric(summary_df, "current_monthly_contribution"))
-    if summary_df is not None and not summary_df.empty
-    else 0
-)
-initial_savings = (
-    int(safe_summary_metric(summary_df, "initial_savings"))
-    if summary_df is not None and not summary_df.empty
-    else 0
-)
-top_up = (
-    int(safe_summary_metric(summary_df, "total_topup"))
-    if summary_df is not None and not summary_df.empty
-    else 0
-)
-ttl_cont = (
-    int(safe_summary_metric(summary_df, "total_contribution"))
-    if summary_df is not None and not summary_df.empty
-    else 0
-)
+peak_annual_expense = float(safe_summary_metric(summary_df, "peak_annual_expense") or 0.0)
+peak_annual_expense_year = int(safe_summary_metric(summary_df, "peak_annual_expense_year") or 0)
+current_monthly_contribution = int(safe_summary_metric(summary_df, "current_monthly_contribution") or 0)
+initial_savings = int(safe_summary_metric(summary_df, "initial_savings") or 0)
+top_up = int(safe_summary_metric(summary_df, "total_topup") or 0)
+ttl_cont = int(safe_summary_metric(summary_df, "total_contribution") or 0)
 
 
 # ──────────────────────────────────────────────────────

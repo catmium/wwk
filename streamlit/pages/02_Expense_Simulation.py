@@ -10,7 +10,7 @@ from strings import S, SC, edu_level_label
 from simulation_core import SavingPlan, Assumptions, simulate_education_plan
 from database import save_draft as db_save_draft
 from presets import normalize_cust_id, cust_id_validation_error
-from state import draft_set, _widget_key, require_login
+from state import draft_set, _widget_key, require_login, draft_owner_error
 
 require_login()
 
@@ -19,6 +19,19 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+
+# Page-1 persistent-widget buffer keys for the assumption fields. Cleared
+# whenever new values are written to the draft so Page 1 refreshes from it.
+_USER_INFO_WIDGET_KEYS = [
+    "initial_savings",
+    "monthly_contribution",
+    "general_inflation_rate",
+    "general_inflation_rate__pct_display",
+    "education_inflation_rate",
+    "education_inflation_rate__pct_display",
+    "investment_return_rate",
+    "investment_return_rate__pct_display",
+]
 
 
 # ============================================================
@@ -48,16 +61,7 @@ def _sync_p2_assump_to_draft_and_clear_buffers():
     if _v_inv_pct is not None:
         draft_set("investment_return_rate", round(float(_v_inv_pct) / 100, 8))
 
-    for _f in [
-        "initial_savings",
-        "monthly_contribution",
-        "general_inflation_rate",
-        "general_inflation_rate__pct_display",
-        "education_inflation_rate",
-        "education_inflation_rate__pct_display",
-        "investment_return_rate",
-        "investment_return_rate__pct_display",
-    ]:
+    for _f in _USER_INFO_WIDGET_KEYS:
         st.session_state.pop(_widget_key(_f), None)
 
 
@@ -366,6 +370,10 @@ if _sp_obj is not None and _as_obj is not None and _children_obj is not None:
             if _cid_err:
                 st.error(_cid_err)
                 st.stop()
+            _owner_err = draft_owner_error(_final_cid)
+            if _owner_err:
+                st.error(_owner_err)
+                st.stop()
 
             # ── Convert raw widget values to model types ──
             _gen_decimal = round(float(_new_gen_pct) / 100, 8)
@@ -387,17 +395,7 @@ if _sp_obj is not None and _as_obj is not None and _children_obj is not None:
             # if the key is missing — so we must delete stale buffers here
             # to force a refresh on Page 1. This mirrors the proven pattern
             # used by apply_loaded_draft_to_state() when importing from DB.
-            _fields_to_refresh = [
-                "initial_savings",
-                "monthly_contribution",
-                "general_inflation_rate",
-                "general_inflation_rate__pct_display",
-                "education_inflation_rate",
-                "education_inflation_rate__pct_display",
-                "investment_return_rate",
-                "investment_return_rate__pct_display",
-            ]
-            for _f in _fields_to_refresh:
+            for _f in _USER_INFO_WIDGET_KEYS:
                 st.session_state.pop(_widget_key(_f), None)
 
             _new_sp = SavingPlan(
@@ -706,17 +704,7 @@ else:
 
     # For education categories, sort sub-category segments by education level;
     # for other categories, fall back to amount-based ordering.
-    _EDU_LEVEL_ORDER_KEYS = [
-        "kindergarten", "elementary", "middle_school",
-        "high_school", "bachelor", "master", "doctor", "other",
-    ]
-    _edu_label_to_order = {edu_level_label(k): i for i, k in enumerate(_EDU_LEVEL_ORDER_KEYS)}
-
-    def _sub_cat_order_idx(row):
-        if "education" in str(row["category"]).lower():
-            return _edu_label_to_order.get(str(row["sub_category"]), 999)
-        return 999
-
+    # (Reuses _sub_cat_order_idx defined earlier in this section.)
     exp_agg_sub["order_idx"] = exp_agg_sub.apply(_sub_cat_order_idx, axis=1)
 
     cat_bars = (
@@ -923,12 +911,6 @@ st.markdown("---")
 # 📊 ตารางข้อมูล
 st.subheader("ตารางข้อมูล")
 with st.expander(S("p2", "tbl_summary"), expanded=False):
-#     if summary_df.empty:
-#         st.info(S("p2", "info_no_summary"))
-#     else:
-#         display_df = summary_df.copy()
-#         display_df.columns = [c.capitalize() for c in display_df.columns]
-#         st.dataframe(display_df, width="stretch", hide_index=True)
     if summary_df.empty:
         st.info(S("p2", "info_no_summary"))
     else:

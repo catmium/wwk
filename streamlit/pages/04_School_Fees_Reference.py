@@ -8,6 +8,8 @@ import pandas as pd
 from strings import S, edu_level_label, school_type_label, country_label
 from school_fees import load_school_fees
 from cost_of_living import load_cost_of_living
+from financial_aid import load_financial_aid, AID_LABELS
+from fx import load_fx_table, load_fx_rates
 from state import require_login
 
 require_login()
@@ -39,7 +41,7 @@ if not df_all.empty:
     df_all["ระดับ"] = df_all["level"].apply(edu_level_label)
     df_all["ประเภท"] = df_all["school_type"].apply(school_type_label)
     df_all["ประเทศ"] = df_all["country"].apply(country_label)
-    df_all["เมือง"] = df_all["city"].fillna("").astype(str) if "city" in df_all.columns else ""
+    df_all["เมือง"] = df_all.get("city", "").fillna("").astype(str)
     df_all["ชื่อสถาบัน"] = df_all["school_name"]
     df_all["ค่าเล่าเรียน/ปี (฿)"] = pd.to_numeric(df_all["annual_cost"], errors="coerce")
     df_all["ช่วงอายุ"] = df_all.apply(
@@ -70,6 +72,24 @@ with st.sidebar:
 st.title(S("p4", "title"))
 st.caption(S("p4", "caption"))
 st.warning(S("p4", "disclaimer"))
+
+# ----- FX rates used to convert foreign fees/costs into THB -----
+_fx_tbl = load_fx_table()
+_fx_asof = _fx_tbl["as_of_date"].iloc[0] if not _fx_tbl.empty else "-"
+with st.expander(f"💱 อัตราแลกเปลี่ยนที่ใช้แปลงเป็นบาท (ณ {_fx_asof})", expanded=False):
+    st.caption(
+        "ค่าเล่าเรียนและค่าครองชีพสกุลต่างประเทศถูกแปลงเป็นบาทด้วยอัตราด้านล่าง — "
+        "แก้ไขได้ที่ data/fx_rate.csv"
+    )
+    st.dataframe(
+        _fx_tbl.rename(columns={
+            "currency": "สกุลเงิน", "rate_to_thb": "บาท ต่อ 1 หน่วย", "as_of_date": "ณ วันที่",
+        }),
+        width="stretch",
+        hide_index=True,
+        column_config={"บาท ต่อ 1 หน่วย": st.column_config.NumberColumn(format="฿%,.2f")},
+    )
+
 st.markdown("---")
 
 if df_raw.empty:
@@ -158,6 +178,10 @@ st.markdown(f"**{S('p4', 'result_count', n=len(df_filtered))}**")
 if df_filtered.empty:
     st.info(S("p4", "no_results"))
 else:
+    st.caption(
+        f"💱 \"ค่าเล่าเรียน/ปี (฿)\" แปลงจากคอลัมน์ \"ต้นฉบับ\" (สกุลเดิม) "
+        f"ด้วยอัตราแลกเปลี่ยน ณ {_fx_asof}"
+    )
     display_cols = [
         "ชื่อสถาบัน", "ประเทศ", "เมือง", "ประเภท", "ระดับ",
         "ช่วงอายุ", "ค่าเล่าเรียน/ปี (฿)", "ต้นฉบับ",
@@ -192,6 +216,37 @@ else:
         file_name="school_fees_reference.csv",
         mime="text/csv",
     )
+
+# ============================================================
+# FINANCIAL AID / SCHOLARSHIPS REFERENCE (Thai universities)
+# ============================================================
+st.markdown("---")
+st.subheader("🎓 ทุนการศึกษาและความช่วยเหลือทางการเงิน (มหาวิทยาลัยไทย)")
+st.caption(
+    "ทุนการศึกษารายสถาบัน — เลื่อน เรียง หรือค้นหาในตาราง และเปิดลิงก์ \"ที่มา\" "
+    "เพื่อดูรายละเอียดและเงื่อนไขล่าสุด"
+)
+_aid_raw = load_financial_aid()
+
+_aid_q = st.text_input(
+    "ค้นหาสถาบัน",
+    placeholder="เช่น จุฬา, มหิดล, ธรรมศาสตร์, เกษตร, MUIC...",
+    key="aid_uni_search",
+)
+_aid_view = _aid_raw
+if _aid_q.strip():
+    _aid_view = _aid_raw[_aid_raw["University"].str.contains(_aid_q.strip(), case=False, na=False)]
+
+st.caption(f"พบ {len(_aid_view)} จากทั้งหมด {len(_aid_raw)} รายการ")
+st.dataframe(
+    _aid_view.rename(columns=AID_LABELS),
+    width="stretch",
+    hide_index=True,
+    height=360,
+    column_config={
+        "ที่มา": st.column_config.LinkColumn("ที่มา", display_text="🔗 เปิด"),
+    },
+)
 
 # ============================================================
 # COST OF LIVING + ACCOMMODATION REFERENCE (per city)
@@ -256,11 +311,12 @@ with _clf_col3:
 # ---------- Apply filters (no sort — preserve CSV ordering) ----------
 df_living = df_living_raw.copy()
 if not df_living.empty:
-    df_living["_living"] = (
-        df_living["food_thb"] + df_living["transport_thb"] + df_living["utilities_thb"]
-    )
-    df_living["_total_month"] = df_living["accom_thb"] + df_living["_living"]
-    df_living["_total_year"] = df_living["_total_month"] * 12
+    # Derive THB straight from local × rate so this page does not depend on the
+    # loader having pre-built the *_thb_year columns (robust to loader version).
+    _rates = load_fx_rates()
+    _rate_col = df_living["currency"].astype(str).str.strip().map(_rates).fillna(1.0)
+    df_living["_total_year"] = (df_living["total_local_year"] * _rate_col).round().astype(int)
+    df_living["_total_month"] = (df_living["_total_year"] / 12).round().astype(int)
 
     if _selected_col_country_code:
         df_living = df_living[df_living["country"] == _selected_col_country_code]
@@ -278,15 +334,20 @@ if not df_living.empty:
 # ---------- Build display DataFrame ----------
 _col_data = []
 for _, r in df_living.iterrows():
+    _ccy = str(r.get("currency", "THB")).strip() or "THB"
     _col_data.append({
         "ประเทศ": country_label(r["country"]),
         "เมือง": r["city"],
-        "ค่าที่พัก/เดือน (฿)": int(r["accom_thb"]),
-        "ค่าอาหาร/เดือน (฿)": int(r["food_thb"]),
-        "ค่าเดินทาง/เดือน (฿)": int(r["transport_thb"]),
-        "ค่าน้ำ-ไฟ-เน็ต/เดือน (฿)": int(r["utilities_thb"]),
-        "รวม/เดือน (฿)": int(r["_total_month"]),
+        "สกุลเงิน": _ccy,
+        # Original (source) amounts in the city's local currency, per year.
+        "ค่าที่พัก/ปี": int(r["accom_local_year"]),
+        "ค่าอาหาร/ปี": int(r["food_local_year"]),
+        "ค่าเดินทาง/ปี": int(r["transport_local_year"]),
+        "ค่าน้ำ-ไฟ-เน็ต/ปี": int(r["utilities_local_year"]),
+        "รวม/ปี (ต้นฉบับ)": int(r["total_local_year"]),
+        # Converted to THB for budgeting.
         "รวม/ปี (฿)": int(r["_total_year"]),
+        "รวม/เดือน (฿)": int(r["_total_month"]),
         "หมายเหตุ": r.get("note", ""),
         "ที่มา": r.get("source", ""),
     })
@@ -303,37 +364,27 @@ else:
         width="stretch",
         hide_index=True,
         column_config={
-            "ค่าที่พัก/เดือน (฿)": st.column_config.NumberColumn(
-                "ค่าที่พัก/เดือน (฿)",
-                format="฿%,.0f",
-                help="หอพักนักศึกษา / shared apartment / homestay",
+            "ค่าที่พัก/ปี": st.column_config.NumberColumn(
+                "ค่าที่พัก/ปี", format="%,.0f",
+                help="ค่าที่พักรายปี (สกุลเงินท้องถิ่นของเมืองนั้น)",
             ),
-            "ค่าอาหาร/เดือน (฿)": st.column_config.NumberColumn(
-                "ค่าอาหาร/เดือน (฿)",
-                format="฿%,.0f",
-            ),
-            "ค่าเดินทาง/เดือน (฿)": st.column_config.NumberColumn(
-                "ค่าเดินทาง/เดือน (฿)",
-                format="฿%,.0f",
-                help="ค่ารถสาธารณะ / student pass",
-            ),
-            "ค่าน้ำ-ไฟ-เน็ต/เดือน (฿)": st.column_config.NumberColumn(
-                "ค่าน้ำ-ไฟ-เน็ต/เดือน (฿)",
-                format="฿%,.0f",
-            ),
-            "รวม/เดือน (฿)": st.column_config.NumberColumn(
-                "รวม/เดือน (฿)",
-                format="฿%,.0f",
-                help="รวมค่าที่พัก + ค่าครองชีพต่อเดือน",
+            "ค่าอาหาร/ปี": st.column_config.NumberColumn("ค่าอาหาร/ปี", format="%,.0f"),
+            "ค่าเดินทาง/ปี": st.column_config.NumberColumn("ค่าเดินทาง/ปี", format="%,.0f"),
+            "ค่าน้ำ-ไฟ-เน็ต/ปี": st.column_config.NumberColumn("ค่าน้ำ-ไฟ-เน็ต/ปี", format="%,.0f"),
+            "รวม/ปี (ต้นฉบับ)": st.column_config.NumberColumn(
+                "รวม/ปี (ต้นฉบับ)", format="%,.0f",
+                help="รวมต่อปี ในสกุลเงินต้นฉบับ",
             ),
             "รวม/ปี (฿)": st.column_config.NumberColumn(
-                "รวม/ปี (฿)",
-                format="฿%,.0f",
-                help="ประมาณการรวมต่อปี (รวม/เดือน × 12) — ยังไม่รวมค่าเล่าเรียน",
+                "รวม/ปี (฿)", format="฿%,.0f",
+                help="แปลงเป็นบาทด้วยอัตราแลกเปลี่ยนปัจจุบัน — ยังไม่รวมค่าเล่าเรียน",
+            ),
+            "รวม/เดือน (฿)": st.column_config.NumberColumn(
+                "รวม/เดือน (฿)", format="฿%,.0f",
+                help="รวม/ปี (฿) ÷ 12",
             ),
             "ที่มา": st.column_config.LinkColumn(
-                "ที่มา",
-                display_text="🔗 ดู",
+                "ที่มา", display_text="🔗 ดู",
                 help="Numbeo cost-of-living reference",
             ),
         },

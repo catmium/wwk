@@ -19,11 +19,7 @@ from database import (
     count_records,
     prune_cust_id,
 )
-from asset_store import (
-    load_bucket_definitions,
-    get_saved_bucket_meta,
-    has_saved_bucket_definitions,
-)
+from asset_store import load_bucket_definitions
 from state import switch_page_with_persist, require_admin
 
 require_admin()
@@ -736,9 +732,8 @@ def _build_aggregate_tables(cust_id_meta: List[Dict[str, Any]]):
 
     for meta in cust_id_meta:
         cid = meta["cust_id"]
-        latest_meta = meta  # has .latest = created_at
-        staff_id = latest_meta.get("latest_staff_id", "")
-        latest_created_at = latest_meta.get("latest", "")
+        staff_id = meta.get("latest_staff_id", "")
+        latest_created_at = meta.get("latest", "")
         draft = load_latest_draft(cid) or {}
         parsed = _parse_draft(draft)
         ov = parsed["overview"]
@@ -748,7 +743,7 @@ def _build_aggregate_tables(cust_id_meta: List[Dict[str, Any]]):
             "cust_id": cid,
             "staff_id": staff_id,
             "latest_created_at": latest_created_at,
-            "n_snapshots": int(latest_meta.get("n_snapshots", 0)),
+            "n_snapshots": int(meta.get("n_snapshots", 0)),
             "n_children": ov["n_children"],
             "n_parent_expenses": ov["n_parent_expenses"],
             "n_topups": ov["n_topups"],
