@@ -19,7 +19,6 @@ _S: Dict[str, Any] = {
     # ──────────────────────────────────────────────────────
     "common": {
         "btn_add":           "➕ เพิ่มรายการ",
-        "btn_remove_last":   "🗑 ลบรายการล่าสุด",
         "note_optional":     "หมายเหตุ (ไม่บังคับ)",
         "name":              "ชื่อ",
         "amount":            "จำนวนเงิน",
@@ -74,8 +73,6 @@ _S: Dict[str, Any] = {
 
         # ── Section 0: Customer ID ──
         "cid_header":        "🆔 รหัสลูกค้า",
-        # "cid_caption":       "กรุณากรอก cust_id (ตัวเลขเท่านั้น 30 หลักพอดี) — ใช้สำหรับ run simulation และบันทึก/โหลดข้อมูลจากครั้งก่อน",
-        # "cid_placeholder":   "เช่น 001100000000000000000000000122",
         "cid_caption":       "กรุณากรอก cust_id (ตัวเลขเท่านั้น 10 หลักพอดี) — ใช้สำหรับ run simulation และบันทึก/โหลดข้อมูลจากครั้งก่อน",
         "cid_placeholder":   "เช่น 0123456789 (สำหรับทดสอบ)",
         "cid_check_failed":  "ไม่สามารถตรวจสอบข้อมูลก่อนหน้าได้: {error}",
@@ -103,8 +100,6 @@ _S: Dict[str, Any] = {
         "sec1_header":       "1) ข้อมูลลูก",
         "sec1_caption":      "ระบุจำนวนลูก แผนการเรียน และค่าใช้จ่ายพิเศษของลูก",
         "metric_n_children": "จำนวนลูก",
-        "btn_add_child":     "➕ เพิ่มลูก",
-        "btn_rem_child":     "🗑 ลบรายการล่าสุด",
         "child_expander":    "ลูกคนที่ {n}: {name}",
 
         # ── Tabs ──
@@ -121,9 +116,7 @@ _S: Dict[str, Any] = {
         # ── Tab: Education Plans ──
         "edu_caption":       "กรอกรายละเอียดแผนการเรียนแต่ละช่วงอายุ",
         "metric_n_edu":      "แผนการศึกษา",
-        "btn_load_template": "📋 โหลด template มาตรฐาน",
         "edu_plan_header":   "แผนที่ {n} — {level}",
-        "btn_reset_preset":  "↺ รีเซ็ตค่าเริ่มต้น",
 
         # Education plan primary fields
         "label_edu_level":   "ระดับการศึกษา",
@@ -161,8 +154,6 @@ _S: Dict[str, Any] = {
         "opt_country_Other":"🌐 อื่นๆ",
 
         # Slim expander (growth rate + basis year only)
-        "edu_advanced_expander":  "⚙️ ปรับอัตราเงินเฟ้อและปีฐาน (ไม่บังคับ)",
-        "label_override_growth":  "กำหนด cost growth rate และ basis year เอง",
         "label_cost_growth_rate": "อัตราเงินเฟ้อค่าเล่าเรียน (%)",
         "label_cost_basis_year":  "ปีฐานของค่าใช้จ่าย",
 
@@ -197,8 +188,6 @@ _S: Dict[str, Any] = {
         "sec2_header":       "2) ค่าใช้จ่ายครอบครัว",
         "sec2_caption":      "ค่าใช้จ่ายพิเศษที่ไม่ได้ผูกกับลูกโดยตรง ที่อาจกระทบกับเงินออมเพื่อการศึกษา",
         "metric_n_parent":   "รายการค่าใช้จ่าย",
-        "btn_add_parent":    "➕ เพิ่มรายการ",
-        "btn_rem_parent":    "🗑 ลบรายการล่าสุด",
         "parent_card_header":"ค่าใช้จ่ายครอบครัวที่ {n}",
 
         # ── Section 3: Saving Plan ──
@@ -207,8 +196,6 @@ _S: Dict[str, Any] = {
         "label_initial_savings": "เงินออมเริ่มต้น (฿)",
         "label_monthly_contrib": "ออมรายเดือน (฿)",
         "metric_n_topups":       "เงินก้อนพิเศษ (topup)",
-        "btn_add_topup":         "➕ เพิ่มเงินก้อนพิเศษ",
-        "btn_rem_topup":         "🗑 ลบรายการล่าสุด",
         "topup_card_header":     "เงินก้อนพิเศษที่ {n}",
 
         # ── Section 4: Assumptions ──

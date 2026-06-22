@@ -34,12 +34,20 @@ from database import (
 )
 from school_fees import schools_for_level, lookup as lookup_school_fee, CUSTOM_SCHOOL_SENTINEL
 from cost_of_living import load_cost_of_living
+from financial_aid import load_financial_aid, AID_LABELS
+from fx import load_fx_rates, to_thb
+
+
+def _ccy_options():
+    """Currency dropdown options, THB first then the rest (from fx_rate.csv)."""
+    return ["THB"] + sorted(c for c in load_fx_rates() if c != "THB")
 
 from state import (
     _none_if_blank, _to_optional_int,
-    draft_get, draft_set, set_field_value,
+    draft_get, draft_set,
     persist_all_widget_buffers, switch_page_with_persist,
     apply_loaded_draft_to_state,
+    reset_draft_for_new_customer, draft_owner_error,
 )
 from widgets import (
     p_text_input, p_number_input, p_selectbox,
@@ -98,12 +106,14 @@ def _btn_spacer(margin_top_px: int = 28):
 # ที่ user กรอกเอง
 AUTO_EXTRA_MARKER = "[AUTO]"
 
-# Mapping: cost-of-living CSV column → (Thai display name, expense kind label)
+# Mapping: cost-of-living LOCAL-currency column → (Thai display name).
+# Auto-fill stores the local amount + the city's currency; THB is derived at
+# sim time via fx (consistent with education-plan auto-derive).
 _COL_COMPONENTS = [
-    ("accom_thb",     "ค่าที่พัก"),
-    ("food_thb",      "ค่าอาหาร"),
-    ("transport_thb", "ค่าเดินทาง"),
-    ("utilities_thb", "ค่าน้ำ-ไฟ-เน็ต"),
+    ("accom_local_year",     "ค่าที่พัก"),
+    ("food_local_year",      "ค่าอาหาร"),
+    ("transport_local_year", "ค่าเดินทาง"),
+    ("utilities_local_year", "ค่าน้ำ-ไฟ-เน็ต"),
 ]
 
 
@@ -131,7 +141,7 @@ def _auto_extras_from_edu_plans(edu_plans, col_df):
     Groups remaining plans by (country, city), merges the age range across
     plans (min start_age → max end_age), then emits 4 recurring rows per
     (country, city) key (accommodation / food / transport / utilities)
-    using monthly values from cost_of_living.csv × 12.
+    using the annual values from cost_of_living.csv.
 
     Returns (rows, warnings):
         rows: list of dicts ready to write back to draft state.
@@ -233,14 +243,18 @@ def _auto_extras_from_edu_plans(edu_plans, col_df):
         end_age = group["end_age"]
         schools_str = " / ".join(group["schools"]) if group["schools"] else "-"
 
+        # Pull the ORIGINAL local amount + the city's currency; THB is derived
+        # at sim time via fx (re-prices if fx_rate.csv changes).
+        _ccy = str(csv_row.get("currency", "THB")).strip() or "THB"
+
         for col_key, kind_label in _COL_COMPONENTS:
-            monthly_thb = int(csv_row.get(col_key, 0) or 0)
-            if monthly_thb <= 0:
+            local_amt = float(int(csv_row.get(col_key, 0) or 0))
+            if local_amt <= 0:
                 continue
-            annual_thb = float(monthly_thb * 12)
             rows.append({
                 "name": f"{kind_label} - {country_name} - {city}",
-                "amount": annual_thb,
+                "amount": local_amt,
+                "currency": _ccy,
                 "type": "recurring",
                 "trigger_mode": "by_child_age",
                 "inflation_type": "general",
@@ -257,9 +271,9 @@ def _auto_extras_from_edu_plans(edu_plans, col_df):
 
 
 # Field names used inside each child.{i}.extra.{j}.* sub-record. Centralised
-# so _delete_extra_row และ _apply_auto_extras_to_draft อ้างถึงชุดเดียวกัน
+# so _delete_indexed_row และ _apply_auto_extras_to_draft อ้างถึงชุดเดียวกัน
 _EXTRA_FIELDS = (
-    "name", "amount", "type", "trigger_mode", "inflation_type",
+    "name", "amount", "currency", "type", "trigger_mode", "inflation_type",
     "year", "end_year", "child_age", "start_year",
     "start_age", "end_age", "note",
 )
@@ -267,7 +281,7 @@ _EXTRA_FIELDS = (
 # Field tuples สำหรับ list อื่น ๆ ที่ใช้กับ _delete_indexed_row
 _EDU_FIELDS = (
     "level", "country", "school_type", "school_name",
-    "start_age", "end_age", "annual_cost",
+    "start_age", "end_age", "annual_cost", "annual_currency",
     "show_advanced", "cost_growth_rate", "cost_basis_year", "note",
 )
 _PARENT_FIELDS = (
@@ -360,41 +374,6 @@ def _delete_all_rows(
     draft_set(count_field, 0)
 
 
-def _delete_extra_row(draft, child_idx: int, del_idx: int, n_extra: int, field_n_extra: str):
-    """Remove the extra-expense row at del_idx; shift subsequent rows down by 1.
-
-    ใช้กับปุ่มถังขยะในแต่ละ card เพื่อให้ user ลบรายการกลาง ๆ ได้ ไม่ใช่แค่
-    รายการล่าสุด. ลบทั้ง draft keys และ widget-state keys (ถ้ามี) เพื่อกัน
-    ค่าตกค้างจาก row เดิมปรากฏที่ index ใหม่หลัง rerun
-    """
-    # Shift values: row k+1 → row k, สำหรับ k จาก del_idx ถึง n_extra-2
-    for k in range(del_idx, n_extra - 1):
-        for f in _EXTRA_FIELDS:
-            src_key = f"child.{child_idx}.extra.{k+1}.{f}"
-            dst_key = f"child.{child_idx}.extra.{k}.{f}"
-            if src_key in draft:
-                draft[dst_key] = draft[src_key]
-
-    # ลบ key ของแถวสุดท้าย (orphan หลังจาก shift) ทั้ง draft และ widget state
-    for f in _EXTRA_FIELDS:
-        orphan_key = f"child.{child_idx}.extra.{n_extra-1}.{f}"
-        if orphan_key in draft:
-            del draft[orphan_key]
-        # widget state ก็ใช้ key เดียวกัน — กันค่าตกค้างใน st.session_state
-        if orphan_key in st.session_state:
-            del st.session_state[orphan_key]
-
-    # ค่าใน widget state ของแถวที่ถูก shift ก็ต้องล้างด้วย เพื่อให้ widget
-    # อ่านค่าใหม่จาก draft ตอน rerun (ไม่งั้นจะเห็นค่าของแถวเดิม index นั้น)
-    for k in range(del_idx, n_extra - 1):
-        for f in _EXTRA_FIELDS:
-            wkey = f"child.{child_idx}.extra.{k}.{f}"
-            if wkey in st.session_state:
-                del st.session_state[wkey]
-
-    draft_set(field_n_extra, n_extra - 1)
-
-
 def _apply_auto_extras_to_draft(draft, child_idx: int, field_n_extra: str, new_auto_rows):
     """Replace mode: keep manual rows, drop existing [AUTO] rows, append new ones.
 
@@ -413,6 +392,7 @@ def _apply_auto_extras_to_draft(draft, child_idx: int, field_n_extra: str, new_a
         manual_rows.append({
             "name": draft_get(f"child.{child_idx}.extra.{j}.name", f"Expense {j+1}"),
             "amount": float(draft_get(f"child.{child_idx}.extra.{j}.amount", 100000.0)),
+            "currency": draft_get(f"child.{child_idx}.extra.{j}.currency", "THB"),
             "type": draft_get(f"child.{child_idx}.extra.{j}.type", "one_time"),
             "trigger_mode": draft_get(f"child.{child_idx}.extra.{j}.trigger_mode", "by_year"),
             "inflation_type": draft_get(f"child.{child_idx}.extra.{j}.inflation_type", "general"),
@@ -434,6 +414,7 @@ def _apply_auto_extras_to_draft(draft, child_idx: int, field_n_extra: str, new_a
     for j, row in enumerate(merged):
         draft_set(f"child.{child_idx}.extra.{j}.name", row["name"])
         draft_set(f"child.{child_idx}.extra.{j}.amount", float(row["amount"]))
+        draft_set(f"child.{child_idx}.extra.{j}.currency", row.get("currency", "THB"))
         draft_set(f"child.{child_idx}.extra.{j}.type", row["type"])
         draft_set(f"child.{child_idx}.extra.{j}.trigger_mode", row["trigger_mode"])
         draft_set(f"child.{child_idx}.extra.{j}.inflation_type", row["inflation_type"])
@@ -492,6 +473,7 @@ def _apply_default_edu_preset(draft, child_idx: int, current_n_edu: int, field_n
         country = base["country"]
         school_type = base["school_type"]
         annual_cost = float(base["annual_cost"])
+        annual_currency = "THB"
         start_age = int(base["start_age"])
         end_age = int(base["end_age"])
 
@@ -503,10 +485,12 @@ def _apply_default_edu_preset(draft, child_idx: int, current_n_edu: int, field_n
             _st = row.get("school_type")
             if _st:
                 school_type = str(_st)
-            _ac = row.get("annual_cost")
+            # Use ORIGINAL amount + currency; THB derived at sim time via fx.
+            _oamt = row.get("original_amount")
             try:
-                if _ac is not None and not pd.isna(_ac):
-                    annual_cost = float(_ac)
+                if _oamt is not None and not pd.isna(_oamt):
+                    annual_cost = float(_oamt)
+                    annual_currency = str(row.get("original_currency") or "THB").strip() or "THB"
             except (TypeError, ValueError):
                 pass
             _amin = row.get("age_min")
@@ -526,6 +510,7 @@ def _apply_default_edu_preset(draft, child_idx: int, current_n_edu: int, field_n
         draft_set(f"child.{child_idx}.edu.{j}.start_age", int(start_age))
         draft_set(f"child.{child_idx}.edu.{j}.end_age", int(end_age))
         draft_set(f"child.{child_idx}.edu.{j}.annual_cost", float(annual_cost))
+        draft_set(f"child.{child_idx}.edu.{j}.annual_currency", annual_currency)
         draft_set(f"child.{child_idx}.edu.{j}.show_advanced", False)
         draft_set(f"child.{child_idx}.edu.{j}.cost_growth_rate", float(base["cost_growth_rate"]))
         draft_set(f"child.{child_idx}.edu.{j}.cost_basis_year", int(base["cost_basis_year"]))
@@ -683,6 +668,17 @@ def render_section_cust_id():
         )
         cust_id_clean = normalize_cust_id(cust_id_value)
         cust_id_error = cust_id_validation_error(cust_id_clean)
+
+        # A complete, valid id that differs from the draft's owner means the
+        # on-screen data belongs to a previous customer → start fresh so it
+        # can't be saved under the new id. (Import below re-loads their history.)
+        if cust_id_clean and cust_id_error is None:
+            _owner = draft_get("_owner_cust_id", "")
+            if not _owner:
+                draft_set("_owner_cust_id", cust_id_clean)
+            elif _owner != cust_id_clean:
+                reset_draft_for_new_customer(cust_id_clean)
+                st.rerun()
 
         if cust_id_clean and cust_id_error:
             st.warning(cust_id_error)
@@ -881,6 +877,7 @@ def render_section_children(draft):
                     f_start_age = f"child.{i}.edu.{j}.start_age"
                     f_end_age = f"child.{i}.edu.{j}.end_age"
                     f_annual_cost = f"child.{i}.edu.{j}.annual_cost"
+                    f_annual_currency = f"child.{i}.edu.{j}.annual_currency"
                     f_show_advanced = f"child.{i}.edu.{j}.show_advanced"
                     f_cost_growth = f"child.{i}.edu.{j}.cost_growth_rate"
                     f_cost_basis = f"child.{i}.edu.{j}.cost_basis_year"
@@ -893,6 +890,7 @@ def render_section_children(draft):
                     draft.setdefault(f_start_age, default_preset["start_age"])
                     draft.setdefault(f_end_age, default_preset["end_age"])
                     draft.setdefault(f_annual_cost, float(default_preset["annual_cost"]))
+                    draft.setdefault(f_annual_currency, "THB")
                     draft.setdefault(f_show_advanced, False)
                     draft.setdefault(f_cost_growth, float(default_preset["cost_growth_rate"]))
                     draft.setdefault(f_cost_basis, int(default_preset["cost_basis_year"]))
@@ -993,7 +991,9 @@ def render_section_children(draft):
                         if _country_default not in COUNTRY_OPTIONS:
                             _country_default = ""
 
-                        s1, s2, s3, s4 = st.columns(4)
+                        # country/type = ซ้ายครึ่งแถว | cost/currency/note เท่ากัน = ขวาครึ่งแถว
+                        # (รวม cost+currency+note = 3 = ครึ่งหนึ่งของ 6 เท่ากับชื่อโรงเรียนแถวบน)
+                        s1, s2, s3, s_ccy, s4 = st.columns([1.5, 1.5, 1, 1, 1])
 
                         with s1:
                             p_selectbox(
@@ -1022,6 +1022,14 @@ def render_section_children(draft):
                                 step=10_000.0,
                                 format="%.0f",
                                 cast=float,
+                            )
+
+                        with s_ccy:
+                            p_selectbox(
+                                "สกุลเงิน",
+                                field=f_annual_currency,
+                                options=_ccy_options(),
+                                default="THB",
                             )
 
                         with s4:
@@ -1080,6 +1088,33 @@ def render_section_children(draft):
                             cost_growth_rate = None
                             cost_basis_year = None
 
+                        # 🎓 Scholarships matching THIS plan's school — pinned
+                        # to the very bottom of the card.
+                        _aid_sn = (draft_get(f_school_name) or "").strip()
+                        if _aid_sn:
+                            _aid_m = load_financial_aid()
+                            _aid_m = _aid_m[_aid_m["University"] == _aid_sn]
+                            if not _aid_m.empty:
+                                with st.expander(
+                                    f"🎓 ทุนการศึกษาที่เกี่ยวข้อง ({len(_aid_m)} รายการ)",
+                                    expanded=False,
+                                ):
+                                    for _i, (_, _aid_r) in enumerate(_aid_m.iterrows()):
+                                        _src = str(_aid_r["Source"]).strip()
+                                        _src_md = (
+                                            f"[🔗 เปิดลิงก์]({_src})"
+                                            if _src.startswith("http") else (_src or "-")
+                                        )
+                                        st.markdown(
+                                            f"**🎓 {_aid_r['Scholarship']}**\n\n"
+                                            f"- **ประเภททุน:** {_aid_r['Scholarship_Type']}\n"
+                                            f"- **มูลค่าทุน:** {_aid_r['Scholarship_Value']}\n"
+                                            f"- **เงื่อนไข:** {_aid_r['Conditions']}\n"
+                                            f"- **ที่มา:** {_src_md}"
+                                        )
+                                        if _i < len(_aid_m) - 1:
+                                            st.divider()
+
                         edu_plans.append(
                             EducationPlan(
                                 level=draft_get(f_level),
@@ -1088,7 +1123,10 @@ def render_section_children(draft):
                                 school_name=_none_if_blank(draft_get(f_school_name)),
                                 start_age=int(draft_get(f_start_age)),
                                 end_age=int(draft_get(f_end_age)),
-                                annual_cost=float(draft_get(f_annual_cost)),
+                                annual_cost=to_thb(
+                                    float(draft_get(f_annual_cost)),
+                                    draft_get(f_annual_currency, "THB"),
+                                ),
                                 cost_growth_rate=cost_growth_rate,
                                 cost_basis_year=cost_basis_year,
                                 note=_none_if_blank(draft_get(f_note)),
@@ -1177,6 +1215,7 @@ def render_section_children(draft):
                 for j in range(n_extra):
                     f_name = f"child.{i}.extra.{j}.name"
                     f_amount = f"child.{i}.extra.{j}.amount"
+                    f_currency = f"child.{i}.extra.{j}.currency"
                     f_type = f"child.{i}.extra.{j}.type"
                     f_trigger = f"child.{i}.extra.{j}.trigger_mode"
                     f_infl = f"child.{i}.extra.{j}.inflation_type"
@@ -1190,6 +1229,7 @@ def render_section_children(draft):
 
                     draft.setdefault(f_name, f"Expense {j+1}")
                     draft.setdefault(f_amount, 100000.0)
+                    draft.setdefault(f_currency, "THB")
                     draft.setdefault(f_type, "one_time")
                     draft.setdefault(f_trigger, "by_year")
                     draft.setdefault(f_infl, "general")
@@ -1212,10 +1252,18 @@ def render_section_children(draft):
                                 width="stretch",
                                 help="ลบรายการนี้ออก (รายการที่อยู่ด้านล่างจะเลื่อนขึ้นมาแทน)",
                             ):
-                                _delete_extra_row(draft, i, j, n_extra, field_n_extra)
+                                _delete_indexed_row(
+                                    draft,
+                                    key_prefix=f"child.{i}.extra",
+                                    fields=_EXTRA_FIELDS,
+                                    del_idx=j,
+                                    n_rows=n_extra,
+                                    count_field=field_n_extra,
+                                )
                                 st.rerun()
 
-                        x1, x2, x3 = st.columns(3)
+                        # name+amount = ครึ่งซ้าย (amount ยาวถึงกลางหน้า) | currency+type = ครึ่งขวา เท่าๆ กัน
+                        x1, x2, x_ccy, x3 = st.columns([2.5, 1.5, 2, 2])
                         with x1:
                             p_text_input(SC("name"), field=f_name, default=f"Expense {j+1}")
                         with x2:
@@ -1227,6 +1275,13 @@ def render_section_children(draft):
                                 step=1000.0,
                                 format="%.0f",
                                 cast=float,
+                            )
+                        with x_ccy:
+                            p_selectbox(
+                                "สกุลเงิน",
+                                field=f_currency,
+                                options=_ccy_options(),
+                                default="THB",
                             )
                         with x3:
                             ex_type = p_selectbox(
@@ -1355,9 +1410,12 @@ def render_section_children(draft):
                         p_text_input(SC("note_optional"), field=f_note, default="")
 
                         extra_expenses.append(
-                            ExtraExpense(
+                            ExtraExpense(  # amount → THB via fx (default THB = no-op)
                                 name=draft_get(f_name),
-                                amount=float(draft_get(f_amount)),
+                                amount=to_thb(
+                                    float(draft_get(f_amount)),
+                                    draft_get(f_currency, "THB"),
+                                ),
                                 type=draft_get(f_type),
                                 year=year,
                                 end_year=end_year,
@@ -1674,19 +1732,16 @@ def render_section_saving_plan(draft):
             # เสมอภายในรอบที่นิ่งแล้ว). scale: once [1,1,1,1] / multi [1,.5,.5,1,1].
             _mode_pre = draft_get(f_mode, "once")
 
-            def _topup_mode_select():
-                return p_selectbox(
-                    "ความถี่",
-                    field=f_mode,
-                    options=["once", "multi"],
-                    default="once",
-                    format_func=lambda m: "ครั้งเดียว" if m == "once" else "หลายปี",
-                )
-
             if _mode_pre == "multi":
                 cc1, cc2, cc3, cc4, cc5 = st.columns([1, 0.5, 0.5, 1, 1])
                 with cc1:
-                    _tp_mode = _topup_mode_select()
+                    _tp_mode = p_selectbox(
+                        "ความถี่",
+                        field=f_mode,
+                        options=["once", "multi"],
+                        default="once",
+                        format_func=lambda m: "ครั้งเดียว" if m == "once" else "หลายปี",
+                    )
                 with cc2:
                     p_number_input(
                         "ปีแรก",
@@ -1737,7 +1792,13 @@ def render_section_saving_plan(draft):
             else:
                 cc1, cc2, cc3, cc4 = st.columns([1, 1, 1, 1])
                 with cc1:
-                    _tp_mode = _topup_mode_select()
+                    _tp_mode = p_selectbox(
+                        "ความถี่",
+                        field=f_mode,
+                        options=["once", "multi"],
+                        default="once",
+                        format_func=lambda m: "ครั้งเดียว" if m == "once" else "หลายปี",
+                    )
                 with cc2:
                     p_number_input(
                         SC("year"),
@@ -2031,6 +2092,10 @@ def render_section_review_and_run(
         if input_errors:
             for msg in input_errors:
                 st.error(msg)
+            st.stop()
+        _owner_err = draft_owner_error(_final_cust_id)
+        if _owner_err:
+            st.error(_owner_err)
             st.stop()
         try:
             expense_df, saving_df, summary_df = simulate_education_plan(

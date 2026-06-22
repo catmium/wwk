@@ -1,4 +1,3 @@
-import re
 import streamlit as st
 
 from strings import S
@@ -48,7 +47,7 @@ if not st.session_state.get("staff_id_verified"):
 
         if _ok:
             _sid_clean = (_sid or "").strip()
-            if not re.fullmatch(r"\d{5}", _sid_clean):
+            if not (_sid_clean.isdigit() and len(_sid_clean) == 5):
                 st.error("❌ Staff ID ต้องเป็นตัวเลข 5 หลัก เท่านั้น")
             else:
                 st.session_state["staff_id"] = _sid_clean

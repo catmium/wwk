@@ -2,7 +2,7 @@
 School-fees reference data, loaded from data/school_fees.csv.
 
 CSV columns (internal keys; Page 4 translates for display):
-    school_name, level, country, school_type,
+    school_name, level, country, city, school_type,
     age_min, age_max, annual_cost,
     original_amount, original_currency,
     notes, source_year, ref_url
@@ -20,7 +20,7 @@ _CSV_PATH = os.path.join(os.path.dirname(__file__), "data", "school_fees.csv")
 def load_school_fees() -> pd.DataFrame:
     if not os.path.exists(_CSV_PATH):
         return pd.DataFrame(columns=[
-            "school_name", "level", "country", "school_type",
+            "school_name", "level", "country", "city", "school_type",
             "age_min", "age_max", "annual_cost",
             "original_amount", "original_currency",
             "notes", "source_year", "ref_url",
@@ -32,7 +32,7 @@ def load_school_fees() -> pd.DataFrame:
     for col in ("annual_cost", "original_amount"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    for col in ("school_name", "level", "country", "school_type"):
+    for col in ("school_name", "level", "country", "city", "school_type"):
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
     return df
@@ -67,5 +67,4 @@ def lookup(level: str, school_name: str) -> dict | None:
     rows = df.loc[mask]
     if rows.empty:
         return None
-    row = rows.iloc[0].to_dict()
-    return row
+    return rows.iloc[0].to_dict()

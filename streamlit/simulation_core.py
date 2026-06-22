@@ -135,32 +135,6 @@ def _normalize_school_type(school_type: str) -> str:
     return str(school_type).strip().lower()
 
 
-def _normalize_default_costs(
-    default_costs: Optional[Dict[Tuple[str, str, str], float]]
-) -> Dict[Tuple[str, str, str], float]:
-    if not default_costs:
-        return {}
-
-    normalized: Dict[Tuple[str, str, str], float] = {}
-    for (level, country, school_type), cost in default_costs.items():
-        normalized[
-            (_normalize_level(level), _normalize_country(country), _normalize_school_type(school_type))
-        ] = float(cost)
-    return normalized
-
-
-def _lookup_default_cost(
-    level: str,
-    country: str,
-    school_type: str,
-    normalized_default_costs: Optional[Dict[Tuple[str, str, str], float]] = None,
-) -> Optional[float]:
-    if not normalized_default_costs:
-        return None
-    key = (_normalize_level(level), _normalize_country(country), _normalize_school_type(school_type))
-    return normalized_default_costs.get(key)
-
-
 def _apply_inflation(
     base_amount: float,
     growth_rate: float,
@@ -174,12 +148,6 @@ def _apply_inflation(
     """
     years_elapsed = target_year - base_year
     return float(base_amount) * ((1 + growth_rate) ** years_elapsed)
-
-
-def _get_effective_inflation_base_year(assumptions: Assumptions) -> int:
-    if assumptions.inflation_base_year is not None:
-        return assumptions.inflation_base_year
-    return assumptions.start_year
 
 
 def _prepare_assumptions(assumptions: Optional[Assumptions]) -> Assumptions:
@@ -436,7 +404,6 @@ def _normalize_plan_config(plan: EducationPlan) -> EducationPlan:
 def normalize_education_plan(
     child: Child,
     assumptions: Assumptions,
-    normalized_default_costs: Optional[Dict[Tuple[str, str, str], float]] = None,
 ) -> Child:
     """
     แยก 2 ชั้นชัดเจน
@@ -444,7 +411,6 @@ def normalize_education_plan(
     2) business normalization
     """
     _validate_child(child)
-    normalized_default_costs = normalized_default_costs or {}
 
     # ---------- config normalization ----------
     plans = [_normalize_plan_config(p) for p in child.education_plan]
@@ -462,18 +428,10 @@ def normalize_education_plan(
             annual_cost = float(DEFAULT_EDUCATION_LEVELS[level_key]["annual_cost"])
 
         if annual_cost is None:
-            annual_cost = _lookup_default_cost(
-                level=p.level,
-                country=p.country,
-                school_type=p.school_type,
-                normalized_default_costs=normalized_default_costs,
-            )
-
-        if annual_cost is None:
             raise ValueError(
                 f"Missing annual_cost for child={child.name}, "
                 f"plan=({p.level}, {p.country}, {p.school_type}). "
-                "Please provide annual_cost or configure default_costs."
+                "Please provide annual_cost."
             )
 
         normalized_plan = EducationPlan(
@@ -495,14 +453,7 @@ def normalize_education_plan(
         has_university = _has_university_plan(normalized_plans)
         has_highschool = _has_highschool_plan(normalized_plans)
         if has_university and not has_highschool:
-            hs_cost = _lookup_default_cost(
-                level="high_school",
-                country="TH",
-                school_type="international",
-                normalized_default_costs=normalized_default_costs,
-            )
-            if hs_cost is None:
-                hs_cost = float(DEFAULT_EDUCATION_LEVELS["high_school"]["annual_cost"])
+            hs_cost = float(DEFAULT_EDUCATION_LEVELS["high_school"]["annual_cost"])
 
             auto_hs = EducationPlan(
                 level="high_school",
@@ -529,46 +480,6 @@ def normalize_education_plan(
         education_plan=normalized_plans,
         extra_expenses=child.extra_expenses,
     )
-
-
-# ============================================================
-# DERIVE LAST EXPENSE YEAR
-# ============================================================
-def derive_last_expense_year(
-    children: List[Child],
-    assumptions: Assumptions,
-    parent_expenses: Optional[List[ParentExpense]] = None,
-) -> int:
-    candidate_years: List[int] = [assumptions.start_year]
-
-    for child in children:
-        byear = _birth_year(child)
-
-        for plan in child.education_plan:
-            candidate_years.append(byear + plan.end_age)
-
-        for ex in child.extra_expenses:
-            _validate_extra_expense(ex, child.name)
-            if ex.type == "one_time":
-                if ex.year is not None:
-                    candidate_years.append(ex.year)
-                else:
-                    candidate_years.append(byear + ex.child_age)
-            else:
-                if ex.year is not None and ex.end_year is not None:
-                    candidate_years.append(ex.end_year)
-                else:
-                    candidate_years.append(byear + ex.end_age)
-
-    if parent_expenses:
-        for ex in parent_expenses:
-            _validate_parent_expense(ex)
-            if ex.type == "one_time":
-                candidate_years.append(ex.year)
-            else:
-                candidate_years.append(ex.end_year)
-
-    return max(candidate_years)
 
 
 # ============================================================
@@ -654,7 +565,7 @@ def build_expense_table(
             base_year = (
                 plan.cost_basis_year
                 if plan.cost_basis_year is not None
-                else _get_effective_inflation_base_year(assumptions)
+                else assumptions.inflation_base_year
             )
 
             for year in range(start_year, end_year + 1):
@@ -693,7 +604,7 @@ def build_expense_table(
             else:
                 growth = 0.0
 
-            base_year = _get_effective_inflation_base_year(assumptions)
+            base_year = assumptions.inflation_base_year
 
             for year in expense_years:
                 child_age = calculate_age_in_year(child.birth_date, year)
@@ -726,7 +637,7 @@ def build_expense_table(
             else:
                 growth = 0.0
 
-            base_year = _get_effective_inflation_base_year(assumptions)
+            base_year = assumptions.inflation_base_year
             for year in expense_years:
                 inflated_amount = _apply_inflation(
                     base_amount=ex.amount,
@@ -771,10 +682,13 @@ def _timing_weight(expense_timing: str) -> float:
 
 
 def _calculate_yearly_return_simple(
+    beginning_balance: float,
     balance_before_return: float,
     annual_rate: float,
 ) -> float:
-    if balance_before_return <= 0:
+    # "No return while negative" — ถ้า beginning_balance ติดลบอยู่ตั้งแต่ต้นปี
+    # หรือ balance_before_return (หลังหัก expense ตาม timing) ติดลบ จะไม่คิด return
+    if beginning_balance <= 0 or balance_before_return <= 0:
         return 0.0
     return float(balance_before_return) * float(annual_rate)
 
@@ -925,6 +839,7 @@ def calculate_annual_savings(
                 - expense_return_reduction
             )
             investment_return = _calculate_yearly_return_simple(
+                beginning_balance=beginning_bal,
                 balance_before_return=balance_before_return,
                 annual_rate=float(assumptions.investment_return_rate),
             )
@@ -935,11 +850,30 @@ def calculate_annual_savings(
                 + investment_return
                 - total_expense
             )
-            min_bal_during_year = min(beginning_bal, ending_bal)
-            went_negative_intra_year = (beginning_bal < 0) or (ending_bal < 0)
+            # Intra-year pivot ขึ้นกับ expense_timing — ดูยอด ณ จุดที่ค่าใช้จ่าย
+            # ก้อนใหญ่ถูกหักออกไปแล้ว เพื่อจับ dip กลางปี (ไม่ใช่แค่ต้น/ปลายปี)
+            if assumptions.expense_timing == "start_of_year":
+                intra_year_pivot = beginning_bal + annual_topup - total_expense
+            elif assumptions.expense_timing == "midyear":
+                intra_year_pivot = (
+                    beginning_bal
+                    + annual_contribution * 0.5
+                    + annual_topup
+                    - total_expense
+                )
+            else:
+                intra_year_pivot = ending_bal
+            min_bal_during_year = min(beginning_bal, intra_year_pivot, ending_bal)
+            went_negative_intra_year = (
+                (beginning_bal < 0)
+                or (intra_year_pivot < 0)
+                or (ending_bal < 0)
+            )
 
         net_cashflow = annual_contribution + annual_topup + investment_return - total_expense
-        is_shortfall = ending_bal < 0
+        # is_shortfall ผูกกับ intra-year flag — กัน mismatch กับ summary
+        # ที่ใช้ went_negative_intra_year (build_funding_summary)
+        is_shortfall = bool(went_negative_intra_year)
 
         income_this_year = annual_contribution + annual_topup + investment_return
         cumulative_income += income_this_year
@@ -1133,7 +1067,6 @@ def simulate_education_plan(
     children: List[Child],
     saving_plan: SavingPlan,
     assumptions: Optional[Assumptions] = None,
-    default_costs: Optional[Dict[Tuple[str, str, str], float]] = None,
     parent_expenses: Optional[List[ParentExpense]] = None,
 ):
     """
@@ -1146,7 +1079,6 @@ def simulate_education_plan(
     summary_df : pd.DataFrame
     """
     assumptions_local = _prepare_assumptions(assumptions)
-    normalized_default_costs = _normalize_default_costs(default_costs)
 
     validate_simulation_inputs(
         children=children,
@@ -1159,7 +1091,6 @@ def simulate_education_plan(
         normalize_education_plan(
             child=child,
             assumptions=assumptions_local,
-            normalized_default_costs=normalized_default_costs,
         )
         for child in children
     ]

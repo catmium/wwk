@@ -80,10 +80,6 @@ class BucketReturnModel:
     intra_bucket_correlation : Optional[float]
         ค่า off-diagonal correlation ระหว่าง asset ภายใน bucket นี้
         ถ้า None จะ fallback ไป DEFAULT_INTRA_BUCKET_CORRELATION ตาม bucket_name
-        ใช้เฉพาะเมื่อ assets มีข้อมูลและ correlation_matrix ไม่ได้ระบุ
-    correlation_matrix : Optional[List[List[float]]]
-        explicit full correlation matrix (n_assets x n_assets) สำหรับ asset ภายใน bucket
-        ถ้าระบุจะใช้แทน intra_bucket_correlation
     """
     bucket_name: str
     mean_return: float
@@ -93,13 +89,12 @@ class BucketReturnModel:
     distribution: str = "normal"
     assets: List[AssetReturnModel] = field(default_factory=list)
     intra_bucket_correlation: Optional[float] = None
-    correlation_matrix: Optional[List[List[float]]] = None
 
 
 # Hardcoded default intra-bucket correlation per design intent:
 # liquidity is least correlated internally, growth most correlated.
-# These apply only when BucketReturnModel.assets is non-empty and neither
-# intra_bucket_correlation nor correlation_matrix is set on the model.
+# These apply only when BucketReturnModel.assets is non-empty and
+# intra_bucket_correlation is not set on the model.
 DEFAULT_INTRA_BUCKET_CORRELATION: Dict[str, float] = {
     "liquidity": 0.1,
     "stability": 0.3,
@@ -381,27 +376,7 @@ def validate_bucket_return_models(
                         f"unsupported distribution '{a.distribution}'"
                     )
 
-            # validate correlation matrix / intra_bucket_correlation (R1)
-            n_assets = len(m.assets)
-            if m.correlation_matrix is not None:
-                cm = np.asarray(m.correlation_matrix, dtype=float)
-                if cm.shape != (n_assets, n_assets):
-                    raise ValueError(
-                        f"bucket={m.bucket_name}: correlation_matrix shape "
-                        f"{cm.shape} must be ({n_assets}, {n_assets})"
-                    )
-                if not np.allclose(cm, cm.T, atol=1e-8):
-                    raise ValueError(
-                        f"bucket={m.bucket_name}: correlation_matrix must be symmetric"
-                    )
-                if not np.allclose(np.diag(cm), 1.0, atol=1e-8):
-                    raise ValueError(
-                        f"bucket={m.bucket_name}: correlation_matrix diagonal must be 1.0"
-                    )
-                if np.any(cm < -1.0) or np.any(cm > 1.0):
-                    raise ValueError(
-                        f"bucket={m.bucket_name}: correlation_matrix entries must be in [-1, 1]"
-                    )
+            # validate intra_bucket_correlation (R1)
             if m.intra_bucket_correlation is not None:
                 rho = float(m.intra_bucket_correlation)
                 if rho < -1.0 or rho > 1.0:
@@ -443,7 +418,7 @@ def _resolve_intra_bucket_correlation(
 
     Correlation is hard-coded per bucket via DEFAULT_INTRA_BUCKET_CORRELATION
     (default 0.3 ถ้า bucket_name ไม่อยู่ใน map). Per-model overrides
-    (correlation_matrix, intra_bucket_correlation) are intentionally NOT honored —
+    (intra_bucket_correlation) are intentionally NOT honored —
     correlation is a fixed engine assumption, not a user-tunable knob.
 
     Off-diagonal values are clamped to (-0.999, 0.999) to keep the resulting
@@ -766,14 +741,6 @@ def build_mc_engine_summary(
 
 # optimized version 2
 # LEVEL-2 OPTIMIZATION HELPERS
-
-def _validate_supported_l2_setup(bucket_configs: List) -> None:
-    """
-    Level-2 version assumes contiguous ordered buckets from bucket_configs.
-    It supports any number of buckets, but is optimized for small fixed bucket count.
-    """
-    validate_bucket_configs(bucket_configs)
-
 
 def _prepare_l2_static_context(
     annual_expense_df: pd.DataFrame,
@@ -1231,41 +1198,6 @@ def _build_term_context(
     }
 
 
-def _allocate_yearly_inflow_to_buckets_array(
-    inflow_amount: float,
-    remaining_required_arr: np.ndarray,
-    contribution_priority_names: List[str],
-    bucket_to_idx: Dict[str, int],
-    n_buckets: int,
-) -> np.ndarray:
-    """
-    Same logic as allocate_yearly_inflow_to_buckets(...), but array-based.
-    """
-    if inflow_amount < 0:
-        raise ValueError("inflow_amount must be >= 0")
-
-    alloc = np.zeros(n_buckets, dtype=float)
-    remaining_amount = float(inflow_amount)
-
-    for bucket_name in contribution_priority_names:
-        idx = bucket_to_idx[bucket_name]
-        need = max(0.0, float(remaining_required_arr[idx]))
-
-        if remaining_amount <= 0:
-            break
-
-        give = min(remaining_amount, need)
-        alloc[idx] += give
-        remaining_amount -= give
-
-    if remaining_amount > 0:
-        last_idx = bucket_to_idx[contribution_priority_names[-1]]
-        alloc[last_idx] += remaining_amount
-        remaining_amount = 0.0
-
-    return alloc
-
-
 def _allocate_yearly_inflow_to_buckets_array_fast(
     inflow_amount: float,
     remaining_required_arr: np.ndarray,
@@ -1273,8 +1205,7 @@ def _allocate_yearly_inflow_to_buckets_array_fast(
     n_buckets: int,
 ) -> np.ndarray:
     """
-    OPT-4: same logic + same arithmetic order as
-    _allocate_yearly_inflow_to_buckets_array(), but uses a precomputed integer
+    Allocates the yearly inflow across buckets using a precomputed integer
     priority-index array (priority_idx_arr) — eliminates per-call string→idx
     dict lookups in the hot loop. The numerical sequence (subtraction order,
     branching) is preserved bit-for-bit.
@@ -1433,8 +1364,6 @@ def _simulate_one_mc_path_l2(
     min_bucket0_balance = float("inf")
     detail_rows = [] if keep_path_detail else None
 
-    priority_idx_names = list(funding_rule.contribution_priority)
-
     # OPT-A2: pre-allocate transfer buffers ONCE outside the year loop.
     # Each year resets via .fill(0.0); inplace helpers accumulate via +=.
     # Saves 2 * n_years * n_buckets-sized np.zeros() allocs per path.
@@ -1571,19 +1500,11 @@ def _simulate_one_mc_path_l2(
         _contrib_total = float(contribution_arr[yi])
         if _contrib_total <= 0:
             contribution_in = np.zeros(n_buckets, dtype=float)
-        elif priority_idx_arr is not None:
+        else:
             contribution_in = _allocate_yearly_inflow_to_buckets_array_fast(
                 inflow_amount=_contrib_total,
                 remaining_required_arr=remaining_required,
                 priority_idx_arr=priority_idx_arr,
-                n_buckets=n_buckets,
-            )
-        else:
-            contribution_in = _allocate_yearly_inflow_to_buckets_array(
-                inflow_amount=_contrib_total,
-                remaining_required_arr=remaining_required,
-                contribution_priority_names=priority_idx_names,
-                bucket_to_idx=bucket_to_idx,
                 n_buckets=n_buckets,
             )
         balances = balances + contribution_in
@@ -1844,7 +1765,7 @@ def run_bucket_engine_monte_carlo_level2(
     bucket_return_models = bucket_return_models or default_bucket_return_models()
     mc_config = mc_config or MonteCarloConfig()
 
-    _validate_supported_l2_setup(bucket_configs)
+    validate_bucket_configs(bucket_configs)
     validate_bucket_funding_rule(funding_rule, bucket_configs)
     validate_bucket_return_models(
         bucket_return_models=bucket_return_models,

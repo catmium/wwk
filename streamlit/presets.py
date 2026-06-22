@@ -5,8 +5,9 @@ input-warning collection for Page 1.
 Pulled out of 01_User_Information.py to keep the page file focused on
 layout/rendering.
 """
-import re
+from datetime import date
 import pandas as pd
+import streamlit as st
 
 from strings import (
     S,
@@ -30,10 +31,7 @@ EDU_LEVEL_OPTIONS = [
     "other",
 ]
 
-EDU_LEVEL_LABELS = {k: edu_level_label(k) for k in [
-    "kindergarten", "elementary", "middle_school", "high_school",
-    "bachelor", "master", "doctor", "other",
-]}
+EDU_LEVEL_LABELS = {k: edu_level_label(k) for k in EDU_LEVEL_OPTIONS}
 
 SCHOOL_TYPE_OPTIONS = [
     "international",
@@ -43,9 +41,7 @@ SCHOOL_TYPE_OPTIONS = [
     "other",
 ]
 
-SCHOOL_TYPE_LABELS = {k: school_type_label(k) for k in [
-    "international", "government", "private", "foreign_university", "other",
-]}
+SCHOOL_TYPE_LABELS = {k: school_type_label(k) for k in SCHOOL_TYPE_OPTIONS}
 
 COUNTRY_OPTIONS = ["", "TH", "US", "UK", "AU", "JP", "SG", "CN", "DE", "Other"]
 
@@ -53,6 +49,9 @@ COUNTRY_OPTIONS = ["", "TH", "US", "UK", "AU", "JP", "SG", "CN", "DE", "Other"]
 # ============================================================
 # EDUCATION PRESETS
 # ============================================================
+# cost_basis_year ใช้ปีปัจจุบัน (ตอน module load) แทน hardcode 2026
+_THIS_YEAR = date.today().year
+
 EDU_DEFAULT_PRESETS = {
     "kindergarten": {
         "country": "TH",
@@ -62,7 +61,7 @@ EDU_DEFAULT_PRESETS = {
         "end_age": 6,
         "annual_cost": 200_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
     "elementary": {
@@ -73,7 +72,7 @@ EDU_DEFAULT_PRESETS = {
         "end_age": 12,
         "annual_cost": 500_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
     "middle_school": {
@@ -84,7 +83,7 @@ EDU_DEFAULT_PRESETS = {
         "end_age": 15,
         "annual_cost": 800_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
     "high_school": {
@@ -95,7 +94,7 @@ EDU_DEFAULT_PRESETS = {
         "end_age": 18,
         "annual_cost": 1_000_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
     "bachelor": {
@@ -106,7 +105,7 @@ EDU_DEFAULT_PRESETS = {
         "end_age": 22,
         "annual_cost": 3_000_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
     "master": {
@@ -117,7 +116,7 @@ EDU_DEFAULT_PRESETS = {
         "end_age": 24,
         "annual_cost": 3_000_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
     "doctor": {
@@ -126,9 +125,9 @@ EDU_DEFAULT_PRESETS = {
         "school_name": "",
         "start_age": 25,
         "end_age": 27,
-        "annual_cost": 3_000_000,
+        "annual_cost": 3_000_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
     "other": {
@@ -139,7 +138,7 @@ EDU_DEFAULT_PRESETS = {
         "end_age": 6,
         "annual_cost": 200_000.0,
         "cost_growth_rate": 0.03,
-        "cost_basis_year": 2026,
+        "cost_basis_year": _THIS_YEAR,
         "note": "",
     },
 }
@@ -172,6 +171,7 @@ def apply_edu_preset_to_draft(child_idx: int, edu_idx: int, level: str):
         f"child.{child_idx}.edu.{edu_idx}.start_age": preset["start_age"],
         f"child.{child_idx}.edu.{edu_idx}.end_age": preset["end_age"],
         f"child.{child_idx}.edu.{edu_idx}.annual_cost": preset["annual_cost"],
+        f"child.{child_idx}.edu.{edu_idx}.annual_currency": "THB",
         f"child.{child_idx}.edu.{edu_idx}.show_advanced": False,
         f"child.{child_idx}.edu.{edu_idx}.cost_growth_rate": preset["cost_growth_rate"],
         f"child.{child_idx}.edu.{edu_idx}.cost_basis_year": preset["cost_basis_year"],
@@ -184,12 +184,22 @@ def apply_edu_preset_to_draft(child_idx: int, edu_idx: int, level: str):
 
 def _on_edu_level_change(child_idx: int, edu_idx: int, level_field: str):
     """When education level changes: refresh start/end age from the preset and
-    reset the school selection (schools list is per-level)."""
+    reset the school selection (schools list is per-level).
+    แจ้งเตือนผ่าน st.toast ให้ผู้ใช้รู้ว่าค่า default ถูก reset."""
     new_level = draft_get(level_field, "")
     preset = EDU_DEFAULT_PRESETS.get(new_level, EDU_DEFAULT_PRESETS["other"])
     set_field_value(f"child.{child_idx}.edu.{edu_idx}.start_age", preset["start_age"])
     set_field_value(f"child.{child_idx}.edu.{edu_idx}.end_age", preset["end_age"])
     set_field_value(f"child.{child_idx}.edu.{edu_idx}.school_name", "")
+    try:
+        _lvl_label = EDU_LEVEL_LABELS.get(new_level, new_level)
+        st.toast(
+            f"ปรับช่วงอายุและรีเซ็ตชื่อโรงเรียนตามระดับ '{_lvl_label}' แล้ว",
+            icon="🔄",
+        )
+    except Exception:
+        # toast เป็น nice-to-have — ไม่ควรทำให้ callback แตก
+        pass
 
 
 def _on_school_select(child_idx: int, edu_idx: int, sb_key: str, level_field: str):
@@ -217,10 +227,14 @@ def _on_school_select(child_idx: int, edu_idx: int, sb_key: str, level_field: st
         set_field_value(f"child.{child_idx}.edu.{edu_idx}.country", country)
     if school_type:
         set_field_value(f"child.{child_idx}.edu.{edu_idx}.school_type", school_type)
-    ac = row.get("annual_cost")
+    # Fill the ORIGINAL amount + currency (not the pre-derived THB) so the row
+    # re-prices from fx_rate.csv at sim time — consistent with the rest of the app.
+    oamt = row.get("original_amount")
+    ocur = str(row.get("original_currency") or "THB").strip() or "THB"
     try:
-        if ac is not None and not pd.isna(ac):
-            set_field_value(f"child.{child_idx}.edu.{edu_idx}.annual_cost", float(ac))
+        if oamt is not None and not pd.isna(oamt):
+            set_field_value(f"child.{child_idx}.edu.{edu_idx}.annual_cost", float(oamt))
+            set_field_value(f"child.{child_idx}.edu.{edu_idx}.annual_currency", ocur)
     except (TypeError, ValueError):
         pass
 
@@ -240,7 +254,6 @@ def load_standard_education_template(child_idx: int, n_rows: int):
 # ============================================================
 CUST_ID_REQUIRED_LEN = 10
 CUST_ID_MAX_LEN = 10  # kept for backward-compat with code referencing the cap
-CUST_ID_PATTERN = re.compile(r"^\d+$")
 
 
 def normalize_cust_id(raw: str) -> str:
@@ -251,11 +264,11 @@ def normalize_cust_id(raw: str) -> str:
 def cust_id_validation_error(cust_id: str):
     """
     Returns an error message string if invalid, else None.
-    Rule: numeric only, length must be exactly 30 digits.
+    Rule: numeric only, length must be exactly 10 digits.
     """
     if not cust_id:
         return S("p1", "cid_err_empty")
-    if not CUST_ID_PATTERN.match(cust_id):
+    if not cust_id.isdigit():
         return S("p1", "cid_err_digits")
     if len(cust_id) != CUST_ID_REQUIRED_LEN:
         return S("p1", "cid_err_exact", required=CUST_ID_REQUIRED_LEN, got=len(cust_id))
@@ -267,6 +280,30 @@ def cust_id_validation_error(cust_id: str):
 # ============================================================
 # Errors block the Run button (would otherwise feed garbage to the simulator
 # or trip ValueError mid-run). Warnings inform the user but allow Run.
+def _detect_edu_age_overlap(plans):
+    """
+    Return a list of (level_a, level_b) tuples for any pair of education
+    plans whose [start_age, end_age] intervals overlap.
+
+    Overlap rule: two inclusive ranges [a1,a2] and [b1,b2] overlap iff
+        a1 <= b2 AND b1 <= a2
+    We compare every unordered pair (not just consecutive) — if user picks
+    levels out of order, we still catch it.
+    """
+    overlaps = []
+    n = len(plans)
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = plans[i], plans[j]
+            if a.start_age is None or a.end_age is None:
+                continue
+            if b.start_age is None or b.end_age is None:
+                continue
+            if a.start_age <= b.end_age and b.start_age <= a.end_age:
+                overlaps.append((a, b))
+    return overlaps
+
+
 def collect_input_errors(children, parent_expenses, saving_plan, assumptions):
     errors = []
 
@@ -274,6 +311,15 @@ def collect_input_errors(children, parent_expenses, saving_plan, assumptions):
         for plan in child.education_plan:
             if plan.start_age > plan.end_age:
                 errors.append(S("warn", "edu_age_range", child=child.name, level=edu_level_label(plan.level)))
+
+        # ── NEW: education-level age overlap (blocks Run) ──
+        for a, b in _detect_edu_age_overlap(child.education_plan):
+            errors.append(S(
+                "warn", "edu_age_overlap",
+                child=child.name,
+                level_a=edu_level_label(a.level), start_a=a.start_age, end_a=a.end_age,
+                level_b=edu_level_label(b.level), start_b=b.start_age, end_b=b.end_age,
+            ))
 
         for ex in child.extra_expenses:
             if ex.year is not None and ex.end_year is not None and ex.year > ex.end_year:

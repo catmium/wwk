@@ -37,22 +37,16 @@ def _widget_key(field: str) -> str:
     return f"w__{field}"
 
 
-def _ensure_state(key, default):
-    if key not in st.session_state:
-        st.session_state[key] = default
-    return st.session_state[key]
-
-
 def init_app_state():
     """
     Initialize core session-state keys and seed draft defaults.
     """
-    _ensure_state("draft", {})
-    _ensure_state("simulation_ran", False)
-    _ensure_state("expense_df", None)
-    _ensure_state("saving_df", None)
-    _ensure_state("summary_df", None)
-    _ensure_state("input_snapshot", None)
+    st.session_state.setdefault("draft", {})
+    st.session_state.setdefault("simulation_ran", False)
+    st.session_state.setdefault("expense_df", None)
+    st.session_state.setdefault("saving_df", None)
+    st.session_state.setdefault("summary_df", None)
+    st.session_state.setdefault("input_snapshot", None)
 
     draft = st.session_state["draft"]
     today_year = date.today().year
@@ -68,7 +62,7 @@ def init_app_state():
         "assump_start_year": today_year,
         "general_inflation_rate": 0.02,
         "education_inflation_rate": 0.03,
-        "investment_return_rate": 0.04,
+        "investment_return_rate": 0.0,
         "return_compound_mode": "yearly",
         "expense_timing": "end_of_year",
         "open_recurring_default_years": 5,
@@ -90,7 +84,7 @@ def init_app_state():
     # Old: liquidity_years = N (count of years from year 1)
     #      stability_years = M (count of years after liquidity)
     # New: liquidity_end_year = N, stability_end_year = N + M
-    if "liquidity_years" in draft and "liquidity_end_year" not in {k for k in draft if draft.get(k) != defaults.get(k)}:
+    if "liquidity_years" in draft and draft.get("liquidity_end_year") == defaults["liquidity_end_year"]:
         try:
             draft["liquidity_end_year"] = int(draft["liquidity_years"])
         except Exception:
@@ -221,12 +215,17 @@ def apply_loaded_draft_to_state(loaded_draft: dict) -> int:
     for k, v in loaded_draft.items():
         draft[k] = v
 
-    # Clear ALL cached widget/runtime state so the next render rehydrates
-    # from the freshly-loaded draft. Without this, Streamlit widgets with a
-    # `key=` parameter silently shadow the new `value=` (the widget keeps the
-    # previously-cached value), and Page 3's `_init_widget_state()` skips
-    # re-hydrating `inv_bucket_definitions` when it's already in session_state.
-    keys_to_remove = [
+    _purge_widget_and_bucket_state()
+    # Stamp ownership so a later customer switch can't silently inherit this data.
+    draft["_owner_cust_id"] = str(draft.get("cust_id", "") or "").strip()
+    return len(loaded_draft)
+
+
+def _purge_widget_and_bucket_state() -> None:
+    """Drop cached widget/runtime keys so the next render rehydrates from the
+    draft. Without this, Streamlit widgets with a `key=` silently shadow the new
+    value, and Page 3 skips re-hydrating `inv_bucket_definitions`."""
+    for k in [
         k for k in list(st.session_state.keys())
         if (
             k.startswith("w__")
@@ -237,8 +236,28 @@ def apply_loaded_draft_to_state(loaded_draft: dict) -> int:
             or k.startswith("bucket_year_end_inf_")
             or k == "inv_bucket_definitions"
         )
-    ]
-    for k in keys_to_remove:
+    ]:
         del st.session_state[k]
 
-    return len(loaded_draft)
+
+def reset_draft_for_new_customer(cust_id: str) -> None:
+    """Blank the form for a different customer so one customer's inputs (incl.
+    the bucket/asset config carried inside the draft) can't be saved under
+    another id. Caller should st.rerun() after.
+    ponytail: full reset > field-by-field diff; Import re-loads if they have history."""
+    cid = str(cust_id or "").strip()
+    st.session_state["draft"] = {"cust_id": cid, "_owner_cust_id": cid}
+    _purge_widget_and_bucket_state()
+
+
+def draft_owner_error(cust_id: str):
+    """Save-time backstop: error string if the on-screen draft was built for a
+    different customer than `cust_id`, else None."""
+    owner = str(draft_get("_owner_cust_id", "") or "").strip()
+    cid = str(cust_id or "").strip()
+    if owner and cid and owner != cid:
+        return (
+            f"⚠️ ข้อมูลบนหน้าจอเป็นของลูกค้า {owner} ไม่ตรงกับ {cid} — "
+            f"กรุณากด \"นำเข้าข้อมูลเดิม\" หรือเริ่มกรอกใหม่ก่อนบันทึก"
+        )
+    return None
